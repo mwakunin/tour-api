@@ -59,7 +59,8 @@
     "test:unit:middleware": "NODE_ENV=test NODE_OPTIONS='--experimental-vm-modules' jest src/__tests__/unit/middleware.test.js --runInBand",
     "test:unit:utils": "NODE_ENV=test NODE_OPTIONS='--experimental-vm-modules' jest src/__tests__/unit/utils.test.js --runInBand",
     "test:integration": "NODE_ENV=test NODE_OPTIONS='--experimental-vm-modules' jest src/__tests__/integration --runInBand",
-    "prepare": "husky || true"
+    "prepare": "husky || true",
+    "db:app-role": "node scripts/setup-app-role.js"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx}": [

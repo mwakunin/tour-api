@@ -96,12 +96,40 @@ handler that forgets `tenant_id` silently writes to the seed tenant — exactly
 the failure RLS exists to prevent. **Drop the default in the same change that
 adds the `withTenant` middleware and RLS policies.**
 
-**RLS is not enabled yet, on purpose.** Policies cannot land before a
-middleware sets `app.tenant_id` per request via transaction-scoped
-`set_config(..., true)`, because with no tenant set every policy-protected
-query returns zero rows. They ship together, along with a non-owner runtime
-role — `FORCE ROW LEVEL SECURITY` still exempts the table owner. Mirror
-school-saas's `db/roles.sql`.
+**RLS covers the money-layer tables and `tenants`, and nothing else yet.**
+Migration 0008 enables and FORCEs row-level security on `counterparties`,
+`obligations`, `settlements`, `allocations`, `fx_rates`, `ledger_entries` and
+`tenants`, with both `USING` and `WITH CHECK` — without the latter a handler
+could insert a row attributed to another tenant and merely be unable to read it
+back, which is corruption rather than protection. With no tenant set,
+`public.current_tenant_id()` is NULL and every protected table returns zero
+rows; never everything.
+
+The legacy tables are deliberately still uncovered. Nothing queries the money
+layer yet, so enabling policies there has a blast radius of zero and proves the
+mechanism. `bookings`, `tours`, `payments` and the rest join the policy set in
+the change that moves their handlers onto `withTenantDb` and drops the
+`tenant_id` DEFAULT.
+
+**Two connections, on purpose.** `FORCE ROW LEVEL SECURITY` still exempts a
+table's owner, so an app connecting as the owner has decorative policies.
+`database.js` (`DATABASE_URL`, owner) is for migrations and the owner plane;
+`appDatabase.js` (`APP_DATABASE_URL`, role `tourops_app`, NOBYPASSRLS) is the
+runtime connection and the only one the policies constrain. The role is created
+NOLOGIN by the migration — a password does not belong in a committed file — so
+provision it once per environment with `APP_DB_PASSWORD=... pnpm run db:app-role`.
+
+**The transaction is per operation, NOT per request.** This is the one place
+school-saas's pattern does not port. That project wraps a whole request in one
+transaction; this app calls Safaricom, Pesapal and Paystack from inside request
+handlers, interleaved with queries. A request-scoped transaction would hold one
+of only 15 production connections (3 in dev) open across a multi-second call to
+Daraja, and a handful of concurrent checkouts would exhaust the pool. So
+`runWithTenant` puts the tenant id in AsyncLocalStorage for the request, and
+`withTenantDb` opens a short transaction per operation. Isolation is unchanged —
+`set_config(..., true)` is transaction-scoped either way — only the holding
+time differs. **Never put an external HTTP call inside a `withTenantDb`
+callback.** Nested `withTenantDb` calls reuse the ambient transaction.
 
 **One deliberate schema/snapshot divergence.** `blog_posts_category_tenant_fk`
 is written by hand in migration 0007 as `ON DELETE SET NULL (category_id)` —

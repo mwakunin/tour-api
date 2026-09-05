@@ -1,0 +1,61 @@
+// src/config/appDatabase.js
+//
+// The RLS-constrained connection.
+//
+// `database.js` connects as the owner, which is what migrations and the
+// owner-plane need — but FORCE ROW LEVEL SECURITY still exempts a table's
+// owner, so an app querying through that pool has decorative policies. This
+// pool connects as `tourops_app`, which owns nothing and is NOBYPASSRLS, so
+// the policies in migration 0008 actually constrain it.
+//
+// Every query through here must run inside `withTenantDb` (see
+// tenantContext.js). Querying it without a tenant set is not a leak — it
+// returns zero rows — but it is always a bug.
+
+import { setDefaultResultOrder } from 'dns';
+setDefaultResultOrder('ipv4first');
+
+import '#config/loadEnv.js';
+
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
+import logger from './logger.js';
+import * as schema from '#models/schema.js';
+
+const isDocker = process.env.IS_DOCKER === 'true';
+const connectionUrl = isDocker
+  ? process.env.DOCKER_APP_DATABASE_URL || process.env.APP_DATABASE_URL
+  : process.env.APP_DATABASE_URL;
+
+if (!connectionUrl) {
+  logger.error(
+    '[AppDB] APP_DATABASE_URL is required — the RLS-constrained runtime ' +
+      'connection. Run `pnpm run db:app-role` to provision the role.'
+  );
+  process.exit(1);
+}
+
+const isRemote = connectionUrl.includes('pooler.supabase.com');
+
+export const appPool = postgres(connectionUrl, {
+  max: process.env.NODE_ENV === 'production' ? 15 : 3,
+  idle_timeout: 60,
+  connect_timeout: isRemote ? 30 : 10,
+  ssl:
+    process.env.NODE_ENV === 'production'
+      ? { rejectUnauthorized: false }
+      : false,
+});
+
+export const appDb = drizzle(appPool, {
+  schema,
+  logger: process.env.NODE_ENV === 'development',
+});
+
+export const shutdownAppDb = async () => {
+  try {
+    await appPool.end({ timeout: 5 });
+  } catch (error) {
+    logger.error('[AppDB] error closing pool', { error: error.message });
+  }
+};
