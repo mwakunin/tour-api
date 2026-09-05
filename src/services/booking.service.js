@@ -1,6 +1,10 @@
 // src/services/booking.service.js
 import { eq, and, or, gte, lte, desc, asc, sql } from 'drizzle-orm';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
+import {
+  raiseBookingReceivable,
+  voidBookingReceivables,
+} from './bookingLedger.service.js';
 import {
   bookings,
   generateBookingReferenceSimple,
@@ -41,11 +45,9 @@ export const createBooking = async (data) => {
     const validated = validateBooking(data);
 
     // Fetch tour
-    const [tour] = await db
-      .select()
-      .from(tours)
-      .where(eq(tours.id, validated.tour_id))
-      .limit(1);
+    const [tour] = await withTenantDb((tx) =>
+      tx.select().from(tours).where(eq(tours.id, validated.tour_id)).limit(1)
+    );
 
     if (!tour) {
       throw new Error('Tour not found');
@@ -136,17 +138,20 @@ export const createBooking = async (data) => {
     // Create booking
     let booking;
     try {
-      const result = await db
-        .insert(bookings)
-        .values({
-          ...validated,
-          booking_reference: bookingReference,
-          price_per_person: pricePerPerson.toFixed(2),
-          total_price: totalPrice.toFixed(2),
-          currency,
-          updated_at: new Date(),
-        })
-        .returning();
+      const result = await withTenantDb((tx) =>
+        tx
+          .insert(bookings)
+          .values({
+            tenant_id: currentTenantId(),
+            ...validated,
+            booking_reference: bookingReference,
+            price_per_person: pricePerPerson.toFixed(2),
+            total_price: totalPrice.toFixed(2),
+            currency,
+            updated_at: new Date(),
+          })
+          .returning()
+      );
 
       if (!result || result.length === 0) {
         throw new Error(
@@ -168,13 +173,15 @@ export const createBooking = async (data) => {
     // Fetch complete booking with relations
     let completeBooking;
     try {
-      completeBooking = await db.query.bookings.findFirst({
-        where: eq(bookings.id, booking.id),
-        with: {
-          tour: true,
-          user: true,
-        },
-      });
+      completeBooking = await withTenantDb((tx) =>
+        tx.query.bookings.findFirst({
+          where: eq(bookings.id, booking.id),
+          with: {
+            tour: true,
+            user: true,
+          },
+        })
+      );
 
       if (!completeBooking) {
         logger.warn(
@@ -186,6 +193,11 @@ export const createBooking = async (data) => {
       logger.error('Error fetching complete booking:', fetchError);
       completeBooking = { ...booking, tour, user: null };
     }
+
+    // Raise the receivable. Never throws — a booking must not fail because its
+    // accrual did; that is a reconciliation problem, not a reason to reject a
+    // customer who has committed.
+    await raiseBookingReceivable(completeBooking ?? booking);
 
     // Invalidate relevant caches
     try {
@@ -281,30 +293,32 @@ export const getBookings = async (filters = {}) => {
         const whereClause =
           conditions.length > 0 ? and(...conditions) : undefined;
 
-        const results = await db.query.bookings.findMany({
-          where: whereClause,
-          with: {
-            tour: {
-              columns: {
-                id: true,
-                title: true,
-                slug: true,
-                cover_image: true,
+        const results = await withTenantDb((tx) =>
+          tx.query.bookings.findMany({
+            where: whereClause,
+            with: {
+              tour: {
+                columns: {
+                  id: true,
+                  title: true,
+                  slug: true,
+                  cover_image: true,
+                },
+              },
+              user: {
+                columns: {
+                  id: true,
+                  email: true,
+                  given_name: true,
+                  family_name: true,
+                },
               },
             },
-            user: {
-              columns: {
-                id: true,
-                email: true,
-                given_name: true,
-                family_name: true,
-              },
-            },
-          },
-          orderBy: desc(bookings.created_at),
-          limit: filters.limit || 100,
-          offset: filters.offset || 0,
-        });
+            orderBy: desc(bookings.created_at),
+            limit: filters.limit || 100,
+            offset: filters.offset || 0,
+          })
+        );
 
         return results;
       });
@@ -324,13 +338,15 @@ export const getBookingById = async (id) => {
 
     return await cache.wrap(cacheKey, 300, () => {
       return withRetry(async () => {
-        const booking = await db.query.bookings.findFirst({
-          where: eq(bookings.id, id),
-          with: {
-            tour: true, // Remove the nested with
-            user: true,
-          },
-        });
+        const booking = await withTenantDb((tx) =>
+          tx.query.bookings.findFirst({
+            where: eq(bookings.id, id),
+            with: {
+              tour: true, // Remove the nested with
+              user: true,
+            },
+          })
+        );
 
         return booking || null;
       });
@@ -350,20 +366,22 @@ export const getBookingByReference = async (reference) => {
 
     return await cache.wrap(cacheKey, 300, () => {
       return withRetry(async () => {
-        const booking = await db.query.bookings.findFirst({
-          where: eq(bookings.booking_reference, reference.toUpperCase()),
-          with: {
-            tour: true,
-            user: {
-              columns: {
-                id: true,
-                email: true,
-                given_name: true,
-                family_name: true,
+        const booking = await withTenantDb((tx) =>
+          tx.query.bookings.findFirst({
+            where: eq(bookings.booking_reference, reference.toUpperCase()),
+            with: {
+              tour: true,
+              user: {
+                columns: {
+                  id: true,
+                  email: true,
+                  given_name: true,
+                  family_name: true,
+                },
               },
             },
-          },
-        });
+          })
+        );
 
         return booking || null;
       });
@@ -389,15 +407,17 @@ export const getUserBookings = async (userId, filters = {}) => {
           conditions.push(eq(bookings.status, filters.status));
         }
 
-        const results = await db.query.bookings.findMany({
-          where: and(...conditions),
-          with: {
-            tour: true,
-          },
-          orderBy: desc(bookings.created_at),
-          limit: filters.limit || 50,
-          offset: filters.offset || 0,
-        });
+        const results = await withTenantDb((tx) =>
+          tx.query.bookings.findMany({
+            where: and(...conditions),
+            with: {
+              tour: true,
+            },
+            orderBy: desc(bookings.created_at),
+            limit: filters.limit || 50,
+            offset: filters.offset || 0,
+          })
+        );
 
         return results;
       });
@@ -414,16 +434,26 @@ export const getUserBookings = async (userId, filters = {}) => {
 
 export const updateBookingStatus = async (id, status) => {
   try {
-    const [updated] = await db
-      .update(bookings)
-      .set({
-        status,
-        updated_at: new Date(),
-      })
-      .where(eq(bookings.id, id))
-      .returning();
+    const [updated] = await withTenantDb((tx) =>
+      tx
+        .update(bookings)
+        .set({
+          status,
+          updated_at: new Date(),
+        })
+        .where(eq(bookings.id, id))
+        .returning()
+    );
 
     if (updated) {
+      // A cancelled booking should stop showing as money owed. Void rather
+      // than delete: the accrual was posted, so the row stays and its status
+      // changes. Anything already settled against it is left alone — that is
+      // a refund question, not a bookkeeping one.
+      if (status === 'cancelled') {
+        await voidBookingReceivables(updated.id);
+      }
+
       // Invalidate caches using helper
       await invalidateBooking(
         updated.id,
@@ -466,21 +496,21 @@ export const updatePaymentStatus = async (id, paymentStatus, paymentMethod) => {
       updateData.status = 'confirmed';
     }
 
-    const [updated] = await db
-      .update(bookings)
-      .set(updateData)
-      .where(eq(bookings.id, id))
-      .returning();
+    const [updated] = await withTenantDb((tx) =>
+      tx.update(bookings).set(updateData).where(eq(bookings.id, id)).returning()
+    );
 
     if (updated) {
       // Fetch complete booking for email
-      const completeBooking = await db.query.bookings.findFirst({
-        where: eq(bookings.id, id),
-        with: {
-          tour: true,
-          user: true,
-        },
-      });
+      const completeBooking = await withTenantDb((tx) =>
+        tx.query.bookings.findFirst({
+          where: eq(bookings.id, id),
+          with: {
+            tour: true,
+            user: true,
+          },
+        })
+      );
 
       // Send payment confirmation email if paid
       if (paymentStatus === 'paid') {
@@ -526,23 +556,27 @@ export const updatePaymentStatus = async (id, paymentStatus, paymentMethod) => {
 export const cancelBooking = async (id) => {
   try {
     // Fetch booking before cancelling for email
-    const bookingToCancel = await db.query.bookings.findFirst({
-      where: eq(bookings.id, id),
-      with: {
-        tour: true,
-        user: true,
-      },
-    });
-
-    const [cancelled] = await db
-      .update(bookings)
-      .set({
-        status: 'cancelled',
-        cancelled_at: new Date(),
-        updated_at: new Date(),
+    const bookingToCancel = await withTenantDb((tx) =>
+      tx.query.bookings.findFirst({
+        where: eq(bookings.id, id),
+        with: {
+          tour: true,
+          user: true,
+        },
       })
-      .where(eq(bookings.id, id))
-      .returning();
+    );
+
+    const [cancelled] = await withTenantDb((tx) =>
+      tx
+        .update(bookings)
+        .set({
+          status: 'cancelled',
+          cancelled_at: new Date(),
+          updated_at: new Date(),
+        })
+        .where(eq(bookings.id, id))
+        .returning()
+    );
 
     if (cancelled) {
       // Send cancellation email
@@ -598,18 +632,20 @@ export const getBookingStats = async (filters = {}) => {
         const whereClause =
           conditions.length > 0 ? and(...conditions) : undefined;
 
-        const [stats] = await db
-          .select({
-            total_bookings: sql`count(*)::int`,
-            pending: sql`sum(case when ${bookings.status} = 'pending' then 1 else 0 end)::int`,
-            confirmed: sql`sum(case when ${bookings.status} = 'confirmed' then 1 else 0 end)::int`,
-            cancelled: sql`sum(case when ${bookings.status} = 'cancelled' then 1 else 0 end)::int`,
-            completed: sql`sum(case when ${bookings.status} = 'completed' then 1 else 0 end)::int`,
-            total_revenue: sql`sum(case when ${bookings.payment_status} = 'paid' then ${bookings.total_price}::numeric else 0 end)`,
-            pending_revenue: sql`sum(case when ${bookings.payment_status} = 'pending' then ${bookings.total_price}::numeric else 0 end)`,
-          })
-          .from(bookings)
-          .where(whereClause);
+        const [stats] = await withTenantDb((tx) =>
+          tx
+            .select({
+              total_bookings: sql`count(*)::int`,
+              pending: sql`sum(case when ${bookings.status} = 'pending' then 1 else 0 end)::int`,
+              confirmed: sql`sum(case when ${bookings.status} = 'confirmed' then 1 else 0 end)::int`,
+              cancelled: sql`sum(case when ${bookings.status} = 'cancelled' then 1 else 0 end)::int`,
+              completed: sql`sum(case when ${bookings.status} = 'completed' then 1 else 0 end)::int`,
+              total_revenue: sql`sum(case when ${bookings.payment_status} = 'paid' then ${bookings.total_price}::numeric else 0 end)`,
+              pending_revenue: sql`sum(case when ${bookings.payment_status} = 'pending' then ${bookings.total_price}::numeric else 0 end)`,
+            })
+            .from(bookings)
+            .where(whereClause)
+        );
 
         return {
           total_bookings: parseInt(stats.total_bookings || 0),
@@ -638,9 +674,11 @@ export const checkTourAvailability = async (
   requestedGroupSize
 ) => {
   try {
-    const tour = await db.query.tours.findFirst({
-      where: eq(tours.id, tourId),
-    });
+    const tour = await withTenantDb((tx) =>
+      tx.query.tours.findFirst({
+        where: eq(tours.id, tourId),
+      })
+    );
 
     if (!tour) {
       throw new Error('Tour not found');
@@ -664,22 +702,24 @@ export const checkTourAvailability = async (
     }
 
     // Get existing bookings for the date range
-    const existingBookings = await db.query.bookings.findMany({
-      where: and(
-        eq(bookings.tour_id, tourId),
-        or(eq(bookings.status, 'confirmed'), eq(bookings.status, 'pending')),
-        or(
-          and(
-            gte(bookings.start_date, startDate),
-            lte(bookings.start_date, endDate)
-          ),
-          and(
-            gte(bookings.end_date, startDate),
-            lte(bookings.end_date, endDate)
+    const existingBookings = await withTenantDb((tx) =>
+      tx.query.bookings.findMany({
+        where: and(
+          eq(bookings.tour_id, tourId),
+          or(eq(bookings.status, 'confirmed'), eq(bookings.status, 'pending')),
+          or(
+            and(
+              gte(bookings.start_date, startDate),
+              lte(bookings.start_date, endDate)
+            ),
+            and(
+              gte(bookings.end_date, startDate),
+              lte(bookings.end_date, endDate)
+            )
           )
-        )
-      ),
-    });
+        ),
+      })
+    );
 
     const bookedSpots = existingBookings.reduce(
       (sum, booking) => sum + booking.group_size,
@@ -712,18 +752,20 @@ export const getUpcomingBookings = async (userId, limit = 5) => {
     return await withRetry(async () => {
       const now = new Date().toISOString();
 
-      const results = await db.query.bookings.findMany({
-        where: and(
-          eq(bookings.user_id, userId),
-          gte(bookings.start_date, now),
-          or(eq(bookings.status, 'confirmed'), eq(bookings.status, 'pending'))
-        ),
-        with: {
-          tour: true,
-        },
-        orderBy: asc(bookings.start_date),
-        limit,
-      });
+      const results = await withTenantDb((tx) =>
+        tx.query.bookings.findMany({
+          where: and(
+            eq(bookings.user_id, userId),
+            gte(bookings.start_date, now),
+            or(eq(bookings.status, 'confirmed'), eq(bookings.status, 'pending'))
+          ),
+          with: {
+            tour: true,
+          },
+          orderBy: asc(bookings.start_date),
+          limit,
+        })
+      );
 
       return results;
     });
@@ -741,18 +783,20 @@ export const getPastBookings = async (userId, limit = 10) => {
     return await withRetry(async () => {
       const now = new Date().toISOString();
 
-      const results = await db.query.bookings.findMany({
-        where: and(
-          eq(bookings.user_id, userId),
-          lte(bookings.end_date, now),
-          eq(bookings.status, 'completed')
-        ),
-        with: {
-          tour: true,
-        },
-        orderBy: desc(bookings.end_date),
-        limit,
-      });
+      const results = await withTenantDb((tx) =>
+        tx.query.bookings.findMany({
+          where: and(
+            eq(bookings.user_id, userId),
+            lte(bookings.end_date, now),
+            eq(bookings.status, 'completed')
+          ),
+          with: {
+            tour: true,
+          },
+          orderBy: desc(bookings.end_date),
+          limit,
+        })
+      );
 
       return results;
     });
@@ -769,7 +813,8 @@ export const getRevenueStats = async (_filters = {}) => {
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
         // Get monthly data for last 12 months
-        const monthlyData = await db.execute(sql`
+        const monthlyData = await withTenantDb((tx) =>
+          tx.execute(sql`
           WITH monthly_stats AS (
             SELECT
               TO_CHAR(DATE_TRUNC('month', created_at), 'Mon') as month,
@@ -801,7 +846,8 @@ export const getRevenueStats = async (_filters = {}) => {
             ROUND(CAST(avg_price_per_person AS NUMERIC), 2) as avg_price_per_person,
             total_guests::int
           FROM monthly_stats
-        `);
+        `)
+        );
 
         const rows = monthlyData;
 
@@ -883,7 +929,8 @@ export const getBookingTrends = async () => {
 
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
-        const result = await db.execute(sql`
+        const result = await withTenantDb((tx) =>
+          tx.execute(sql`
           WITH current_year AS (
             SELECT 
               TO_CHAR(DATE_TRUNC('month', created_at), 'Mon') as month,
@@ -914,7 +961,8 @@ export const getBookingTrends = async () => {
           LEFT JOIN previous_year py 
             ON EXTRACT(MONTH FROM cy.month_date) = EXTRACT(MONTH FROM py.month_date)
           ORDER BY cy.month_date;
-        `);
+        `)
+        );
 
         const monthlyData = result;
 

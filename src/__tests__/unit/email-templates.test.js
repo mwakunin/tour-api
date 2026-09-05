@@ -19,7 +19,9 @@ const unpaidBooking = {
 /** Renders the real template, capturing what would have gone to Resend. */
 const renderConfirmation = async (booking) => {
   const service = new EmailService();
-  const send = jest.fn().mockResolvedValue({ data: { id: 'test' }, error: null });
+  const send = jest
+    .fn()
+    .mockResolvedValue({ data: { id: 'test' }, error: null });
   service.resend = { emails: { send } };
 
   await service.sendBookingConfirmation(booking);

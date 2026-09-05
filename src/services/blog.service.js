@@ -1,5 +1,5 @@
 // src/services/blog.service.js
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { blogPosts, blogCategories } from '#models/blog.model.js';
 import { user } from '#models/user.model.js';
 import { eq, desc, asc, like, and, or, sql } from 'drizzle-orm';
@@ -114,47 +114,51 @@ const fetchBlogPosts = async (filters) => {
   const sortFn = sort_order === 'asc' ? asc : desc;
 
   // Query posts with author and category
-  const posts = await db
-    .select({
-      id: blogPosts.id,
-      title: blogPosts.title,
-      slug: blogPosts.slug,
-      excerpt: blogPosts.excerpt,
-      content: blogPosts.content,
-      featured_image: blogPosts.featured_image,
-      category_id: blogPosts.category_id,
-      status: blogPosts.status,
-      meta_title: blogPosts.meta_title,
-      meta_description: blogPosts.meta_description,
-      read_time_minutes: blogPosts.read_time_minutes,
-      views_count: blogPosts.views_count,
-      published_at: blogPosts.published_at,
-      created_at: blogPosts.created_at,
-      updated_at: blogPosts.updated_at,
-      author: {
-        id: user.id,
-        name: user.name,
-        email: user.email,
-      },
-      category: {
-        id: blogCategories.id,
-        name: blogCategories.name,
-        slug: blogCategories.slug,
-      },
-    })
-    .from(blogPosts)
-    .leftJoin(user, eq(blogPosts.author_id, user.id))
-    .leftJoin(blogCategories, eq(blogPosts.category_id, blogCategories.id))
-    .where(whereClause)
-    .orderBy(sortFn(sortColumn))
-    .limit(limit)
-    .offset(offset);
+  const posts = await withTenantDb((tx) =>
+    tx
+      .select({
+        id: blogPosts.id,
+        title: blogPosts.title,
+        slug: blogPosts.slug,
+        excerpt: blogPosts.excerpt,
+        content: blogPosts.content,
+        featured_image: blogPosts.featured_image,
+        category_id: blogPosts.category_id,
+        status: blogPosts.status,
+        meta_title: blogPosts.meta_title,
+        meta_description: blogPosts.meta_description,
+        read_time_minutes: blogPosts.read_time_minutes,
+        views_count: blogPosts.views_count,
+        published_at: blogPosts.published_at,
+        created_at: blogPosts.created_at,
+        updated_at: blogPosts.updated_at,
+        author: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+        },
+        category: {
+          id: blogCategories.id,
+          name: blogCategories.name,
+          slug: blogCategories.slug,
+        },
+      })
+      .from(blogPosts)
+      .leftJoin(user, eq(blogPosts.author_id, user.id))
+      .leftJoin(blogCategories, eq(blogPosts.category_id, blogCategories.id))
+      .where(whereClause)
+      .orderBy(sortFn(sortColumn))
+      .limit(limit)
+      .offset(offset)
+  );
 
   // Get total count
-  const [{ count }] = await db
-    .select({ count: sql`count(*)::int` })
-    .from(blogPosts)
-    .where(whereClause);
+  const [{ count }] = await withTenantDb((tx) =>
+    tx
+      .select({ count: sql`count(*)::int` })
+      .from(blogPosts)
+      .where(whereClause)
+  );
 
   return {
     posts,
@@ -170,40 +174,42 @@ const fetchBlogPosts = async (filters) => {
 // Get single blog post by slug
 export const getBlogPostBySlug = async (slug, incrementViews = false) => {
   try {
-    const [post] = await db
-      .select({
-        id: blogPosts.id,
-        title: blogPosts.title,
-        slug: blogPosts.slug,
-        excerpt: blogPosts.excerpt,
-        content: blogPosts.content,
-        featured_image: blogPosts.featured_image,
-        category_id: blogPosts.category_id,
-        author_id: blogPosts.author_id,
-        status: blogPosts.status,
-        meta_title: blogPosts.meta_title,
-        meta_description: blogPosts.meta_description,
-        read_time_minutes: blogPosts.read_time_minutes,
-        views_count: blogPosts.views_count,
-        published_at: blogPosts.published_at,
-        created_at: blogPosts.created_at,
-        updated_at: blogPosts.updated_at,
-        author: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-        },
-        category: {
-          id: blogCategories.id,
-          name: blogCategories.name,
-          slug: blogCategories.slug,
-        },
-      })
-      .from(blogPosts)
-      .leftJoin(user, eq(blogPosts.author_id, user.id))
-      .leftJoin(blogCategories, eq(blogPosts.category_id, blogCategories.id))
-      .where(eq(blogPosts.slug, slug))
-      .limit(1);
+    const [post] = await withTenantDb((tx) =>
+      tx
+        .select({
+          id: blogPosts.id,
+          title: blogPosts.title,
+          slug: blogPosts.slug,
+          excerpt: blogPosts.excerpt,
+          content: blogPosts.content,
+          featured_image: blogPosts.featured_image,
+          category_id: blogPosts.category_id,
+          author_id: blogPosts.author_id,
+          status: blogPosts.status,
+          meta_title: blogPosts.meta_title,
+          meta_description: blogPosts.meta_description,
+          read_time_minutes: blogPosts.read_time_minutes,
+          views_count: blogPosts.views_count,
+          published_at: blogPosts.published_at,
+          created_at: blogPosts.created_at,
+          updated_at: blogPosts.updated_at,
+          author: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+          },
+          category: {
+            id: blogCategories.id,
+            name: blogCategories.name,
+            slug: blogCategories.slug,
+          },
+        })
+        .from(blogPosts)
+        .leftJoin(user, eq(blogPosts.author_id, user.id))
+        .leftJoin(blogCategories, eq(blogPosts.category_id, blogCategories.id))
+        .where(eq(blogPosts.slug, slug))
+        .limit(1)
+    );
 
     if (!post) {
       return null; // Return null instead of throwing
@@ -211,12 +217,14 @@ export const getBlogPostBySlug = async (slug, incrementViews = false) => {
 
     // Increment views if requested (for public viewing)
     if (incrementViews) {
-      await db
-        .update(blogPosts)
-        .set({
-          views_count: sql`${blogPosts.views_count} + 1`,
-        })
-        .where(eq(blogPosts.id, post.id));
+      await withTenantDb((tx) =>
+        tx
+          .update(blogPosts)
+          .set({
+            views_count: sql`${blogPosts.views_count} + 1`,
+          })
+          .where(eq(blogPosts.id, post.id))
+      );
     }
 
     return post;
@@ -229,40 +237,42 @@ export const getBlogPostBySlug = async (slug, incrementViews = false) => {
 // Get blog post by ID
 export const getBlogPostById = async (id) => {
   try {
-    const [post] = await db
-      .select({
-        id: blogPosts.id,
-        title: blogPosts.title,
-        slug: blogPosts.slug,
-        excerpt: blogPosts.excerpt,
-        content: blogPosts.content,
-        featured_image: blogPosts.featured_image,
-        category_id: blogPosts.category_id,
-        author_id: blogPosts.author_id,
-        status: blogPosts.status,
-        meta_title: blogPosts.meta_title,
-        meta_description: blogPosts.meta_description,
-        read_time_minutes: blogPosts.read_time_minutes,
-        views_count: blogPosts.views_count,
-        published_at: blogPosts.published_at,
-        created_at: blogPosts.created_at,
-        updated_at: blogPosts.updated_at,
-        author: {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-        },
-        category: {
-          id: blogCategories.id,
-          name: blogCategories.name,
-          slug: blogCategories.slug,
-        },
-      })
-      .from(blogPosts)
-      .leftJoin(user, eq(blogPosts.author_id, user.id))
-      .leftJoin(blogCategories, eq(blogPosts.category_id, blogCategories.id))
-      .where(eq(blogPosts.id, id))
-      .limit(1);
+    const [post] = await withTenantDb((tx) =>
+      tx
+        .select({
+          id: blogPosts.id,
+          title: blogPosts.title,
+          slug: blogPosts.slug,
+          excerpt: blogPosts.excerpt,
+          content: blogPosts.content,
+          featured_image: blogPosts.featured_image,
+          category_id: blogPosts.category_id,
+          author_id: blogPosts.author_id,
+          status: blogPosts.status,
+          meta_title: blogPosts.meta_title,
+          meta_description: blogPosts.meta_description,
+          read_time_minutes: blogPosts.read_time_minutes,
+          views_count: blogPosts.views_count,
+          published_at: blogPosts.published_at,
+          created_at: blogPosts.created_at,
+          updated_at: blogPosts.updated_at,
+          author: {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+          },
+          category: {
+            id: blogCategories.id,
+            name: blogCategories.name,
+            slug: blogCategories.slug,
+          },
+        })
+        .from(blogPosts)
+        .leftJoin(user, eq(blogPosts.author_id, user.id))
+        .leftJoin(blogCategories, eq(blogPosts.category_id, blogCategories.id))
+        .where(eq(blogPosts.id, id))
+        .limit(1)
+    );
 
     return post || null;
   } catch (error) {
@@ -287,17 +297,20 @@ export const createBlogPost = async (postData, authorId) => {
         ? new Date()
         : postData.published_at;
 
-    const [post] = await db
-      .insert(blogPosts)
-      .values({
-        ...postData,
-        slug,
-        read_time_minutes,
-        published_at,
-        author_id: authorId,
-        views_count: 0, // Initialize views
-      })
-      .returning();
+    const [post] = await withTenantDb((tx) =>
+      tx
+        .insert(blogPosts)
+        .values({
+          tenant_id: currentTenantId(),
+          ...postData,
+          slug,
+          read_time_minutes,
+          published_at,
+          author_id: authorId,
+          views_count: 0, // Initialize views
+        })
+        .returning()
+    );
 
     // ✅ Invalidate blog list caches
     await cache.delPattern(CacheKeys.patterns.blogPostsLists());
@@ -323,14 +336,16 @@ export const updateBlogPost = async (id, postData) => {
       postData.read_time_minutes = calculateReadTime(postData.content);
     }
 
-    const [post] = await db
-      .update(blogPosts)
-      .set({
-        ...postData,
-        updated_at: new Date(),
-      })
-      .where(eq(blogPosts.id, id))
-      .returning();
+    const [post] = await withTenantDb((tx) =>
+      tx
+        .update(blogPosts)
+        .set({
+          ...postData,
+          updated_at: new Date(),
+        })
+        .where(eq(blogPosts.id, id))
+        .returning()
+    );
 
     if (!post) {
       return null;
@@ -351,10 +366,9 @@ export const updateBlogPost = async (id, postData) => {
 // Delete blog post
 export const deleteBlogPost = async (id) => {
   try {
-    const [post] = await db
-      .delete(blogPosts)
-      .where(eq(blogPosts.id, id))
-      .returning();
+    const [post] = await withTenantDb((tx) =>
+      tx.delete(blogPosts).where(eq(blogPosts.id, id)).returning()
+    );
 
     if (!post) {
       return null;
@@ -383,10 +397,9 @@ export const getAllCategories = async () => {
     const cacheKey = CacheKeys.blogCategories();
 
     return await cache.wrap(cacheKey, 1800, async () => {
-      const categories = await db
-        .select()
-        .from(blogCategories)
-        .orderBy(asc(blogCategories.name));
+      const categories = await withTenantDb((tx) =>
+        tx.select().from(blogCategories).orderBy(asc(blogCategories.name))
+      );
 
       return categories;
     });
@@ -399,11 +412,9 @@ export const getAllCategories = async () => {
 // Get category by ID
 export const getCategoryById = async (id) => {
   try {
-    const [category] = await db
-      .select()
-      .from(blogCategories)
-      .where(eq(blogCategories.id, id))
-      .limit(1);
+    const [category] = await withTenantDb((tx) =>
+      tx.select().from(blogCategories).where(eq(blogCategories.id, id)).limit(1)
+    );
 
     return category || null;
   } catch (error) {
@@ -417,13 +428,16 @@ export const createBlogCategory = async (categoryData) => {
   try {
     const slug = categoryData.slug || createSlug(categoryData.name);
 
-    const [category] = await db
-      .insert(blogCategories)
-      .values({
-        ...categoryData,
-        slug,
-      })
-      .returning();
+    const [category] = await withTenantDb((tx) =>
+      tx
+        .insert(blogCategories)
+        .values({
+          tenant_id: currentTenantId(),
+          ...categoryData,
+          slug,
+        })
+        .returning()
+    );
 
     // ✅ Invalidate categories cache
     await cache.del(CacheKeys.blogCategories());
@@ -439,14 +453,16 @@ export const createBlogCategory = async (categoryData) => {
 // Update category
 export const updateBlogCategory = async (id, categoryData) => {
   try {
-    const [category] = await db
-      .update(blogCategories)
-      .set({
-        ...categoryData,
-        updated_at: new Date(),
-      })
-      .where(eq(blogCategories.id, id))
-      .returning();
+    const [category] = await withTenantDb((tx) =>
+      tx
+        .update(blogCategories)
+        .set({
+          ...categoryData,
+          updated_at: new Date(),
+        })
+        .where(eq(blogCategories.id, id))
+        .returning()
+    );
 
     if (!category) {
       return null;
@@ -467,10 +483,12 @@ export const updateBlogCategory = async (id, categoryData) => {
 export const deleteBlogCategory = async (id) => {
   try {
     // Check if category has posts
-    const [postsCount] = await db
-      .select({ count: sql`count(*)::int` })
-      .from(blogPosts)
-      .where(eq(blogPosts.category_id, id));
+    const [postsCount] = await withTenantDb((tx) =>
+      tx
+        .select({ count: sql`count(*)::int` })
+        .from(blogPosts)
+        .where(eq(blogPosts.category_id, id))
+    );
 
     if (postsCount.count > 0) {
       throw new Error(
@@ -478,10 +496,9 @@ export const deleteBlogCategory = async (id) => {
       );
     }
 
-    const [category] = await db
-      .delete(blogCategories)
-      .where(eq(blogCategories.id, id))
-      .returning();
+    const [category] = await withTenantDb((tx) =>
+      tx.delete(blogCategories).where(eq(blogCategories.id, id)).returning()
+    );
 
     if (!category) {
       return null;

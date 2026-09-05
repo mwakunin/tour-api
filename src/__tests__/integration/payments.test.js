@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { eq } from 'drizzle-orm';
 import { jest } from '@jest/globals';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 // Mock M-Pesa service using ESM-native mocking (jest.mock() doesn't
 // reliably intercept native ESM imports under --experimental-vm-modules)
@@ -786,6 +787,7 @@ describe('Payment API Integration Tests', () => {
       const [payment] = await db
         .insert(payments)
         .values({
+          tenant_id: SEED_TENANT_ID,
           booking_id: testBooking.id,
           amount: '1000.00',
           currency: 'USD',
@@ -918,6 +920,7 @@ async function createTestBooking(tourId, userId, paymentMethod = 'pending') {
   const [booking] = await db
     .insert(bookings)
     .values({
+      tenant_id: SEED_TENANT_ID,
       booking_reference: bookingRef,
       tour_id: tourId,
       user_id: userId,

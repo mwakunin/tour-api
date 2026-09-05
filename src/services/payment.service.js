@@ -9,11 +9,12 @@ import {
 } from './pesapal.service.js';
 import logger from '#config/logger.js';
 import crypto from 'crypto';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { payments } from '#models/payment.model.js';
 import { eq, and } from 'drizzle-orm';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
+import { recordBookingSettlement } from './bookingLedger.service.js';
 
 /**
  * Initialize payment (routes to correct provider)
@@ -185,13 +186,15 @@ export const confirmBankTransfer = async (
 ) => {
   try {
     // Get booking with relations
-    const booking = await db.query.bookings.findFirst({
-      where: eq(bookings.id, bookingId),
-      with: {
-        tour: true,
-        user: true,
-      },
-    });
+    const booking = await withTenantDb((tx) =>
+      tx.query.bookings.findFirst({
+        where: eq(bookings.id, bookingId),
+        with: {
+          tour: true,
+          user: true,
+        },
+      })
+    );
 
     if (!booking) {
       throw new Error('Booking not found');
@@ -208,19 +211,22 @@ export const confirmBankTransfer = async (
     }
 
     // Update booking status
-    const [updatedBooking] = await db
-      .update(bookings)
-      .set({
-        payment_status: 'paid',
-        status: 'confirmed',
-        confirmed_at: new Date(),
-        updated_at: new Date(),
-      })
-      .where(eq(bookings.id, bookingId))
-      .returning();
+    const [updatedBooking] = await withTenantDb((tx) =>
+      tx
+        .update(bookings)
+        .set({
+          payment_status: 'paid',
+          status: 'confirmed',
+          confirmed_at: new Date(),
+          updated_at: new Date(),
+        })
+        .where(eq(bookings.id, bookingId))
+        .returning()
+    );
 
     // Create payment record
     const paymentRecord = {
+      tenant_id: currentTenantId(),
       id: crypto.randomUUID(),
       booking_id: booking.id,
       user_id: booking.user_id,
@@ -236,7 +242,13 @@ export const confirmBankTransfer = async (
     };
 
     try {
-      await db.insert(payments).values(paymentRecord);
+      await withTenantDb((tx) => tx.insert(payments).values(paymentRecord));
+
+      // Money has moved: record it and spend it against the receivable.
+      await recordBookingSettlement({
+        payment: { ...paymentRecord, completed_at: new Date() },
+        booking: updatedBooking,
+      });
     } catch (paymentError) {
       logger.warn('Failed to create payment record:', paymentError);
       // Continue even if payment record fails
@@ -270,19 +282,21 @@ export const getPendingBankTransfers = async (filters = {}) => {
   try {
     const { limit = 100, offset = 0 } = filters;
 
-    const pendingTransfers = await db.query.bookings.findMany({
-      where: and(
-        eq(bookings.payment_method, 'bank_transfer'),
-        eq(bookings.payment_status, 'pending')
-      ),
-      with: {
-        tour: true,
-        user: true,
-      },
-      orderBy: (bookings, { desc }) => [desc(bookings.created_at)],
-      limit,
-      offset,
-    });
+    const pendingTransfers = await withTenantDb((tx) =>
+      tx.query.bookings.findMany({
+        where: and(
+          eq(bookings.payment_method, 'bank_transfer'),
+          eq(bookings.payment_status, 'pending')
+        ),
+        with: {
+          tour: true,
+          user: true,
+        },
+        orderBy: (bookings, { desc }) => [desc(bookings.created_at)],
+        limit,
+        offset,
+      })
+    );
 
     logger.info(`Found ${pendingTransfers.length} pending bank transfers`);
 
@@ -296,19 +310,23 @@ export const getPendingBankTransfers = async (filters = {}) => {
 export const getBankTransferStats = async () => {
   try {
     // Get counts
-    const pending = await db.query.bookings.findMany({
-      where: and(
-        eq(bookings.payment_method, 'bank_transfer'),
-        eq(bookings.payment_status, 'pending')
-      ),
-    });
+    const pending = await withTenantDb((tx) =>
+      tx.query.bookings.findMany({
+        where: and(
+          eq(bookings.payment_method, 'bank_transfer'),
+          eq(bookings.payment_status, 'pending')
+        ),
+      })
+    );
 
-    const confirmed = await db.query.bookings.findMany({
-      where: and(
-        eq(bookings.payment_method, 'bank_transfer'),
-        eq(bookings.payment_status, 'paid')
-      ),
-    });
+    const confirmed = await withTenantDb((tx) =>
+      tx.query.bookings.findMany({
+        where: and(
+          eq(bookings.payment_method, 'bank_transfer'),
+          eq(bookings.payment_status, 'paid')
+        ),
+      })
+    );
 
     // Calculate total amounts
     const pendingAmount = pending.reduce(

@@ -21,6 +21,7 @@ import {
   deleteTestTour,
   buildTestPricingPeriod,
 } from '../helpers/tour.helper.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 describe('Booking API Integration Tests', () => {
   let agent;
@@ -782,7 +783,9 @@ describe('Booking API Integration Tests', () => {
         .expect(200);
 
       expect(response.body.data.special_requests).toBe('Window seat');
-      expect(response.body.data.price_per_person).toBe(booking.price_per_person);
+      expect(response.body.data.price_per_person).toBe(
+        booking.price_per_person
+      );
       expect(response.body.data.total_price).toBe(booking.total_price);
     });
 
@@ -851,6 +854,7 @@ describe('Booking API Integration Tests', () => {
       const [booking] = await db
         .insert(bookings)
         .values({
+          tenant_id: SEED_TENANT_ID,
           tour_id: testTour.id,
           user_id: userToDelete.id,
           group_size: 2,

@@ -12,6 +12,7 @@ import {
   deleteTestAdmin,
   cleanupTestSession,
 } from '../helpers/auth.helper.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 describe('Destination API Integration Tests', () => {
   let agent;
@@ -353,6 +354,7 @@ describe('Destination API Integration Tests', () => {
       const [tempDest] = await db
         .insert(destinations)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Temp Destination',
           slug: `temp-dest-${Date.now()}`,
           description:
@@ -483,6 +485,7 @@ async function createTestDestination() {
   const [destination] = await db
     .insert(destinations)
     .values({
+      tenant_id: SEED_TENANT_ID,
       title: `Test Destination ${Date.now()}`,
       slug: `test-destination-${Date.now()}`,
       description:

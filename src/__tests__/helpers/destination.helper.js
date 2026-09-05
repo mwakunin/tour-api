@@ -4,6 +4,7 @@
 import { db } from '#config/database.js';
 import { destinations } from '#models/destination.model.js';
 import { eq } from 'drizzle-orm';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 /**
  * Create a test destination
@@ -12,6 +13,7 @@ export const createTestDestination = async (overrides = {}) => {
   const timestamp = Date.now();
 
   const destinationData = {
+    tenant_id: SEED_TENANT_ID,
     title: `Test Destination ${timestamp}`,
     slug: `test-destination-${timestamp}`,
     description: 'A test destination for integration testing purposes',

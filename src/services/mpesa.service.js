@@ -1,11 +1,12 @@
 import axios from 'axios';
 import { mpesaConfig, requireMpesaConfig } from '#config/mpesa.config.js';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { payments } from '#models/payment.model.js';
 import { bookings } from '#models/booking.model.js';
 import { eq } from 'drizzle-orm';
 import logger from '#config/logger.js';
 import { emailService } from './email.service.js';
+import { recordBookingSettlement } from './bookingLedger.service.js';
 
 // Logged once per process so "are we hitting live Safaricom?" is answerable
 // from the logs rather than inferred from a URL in an error message.
@@ -108,17 +109,20 @@ export const initiateSTKPush = async ({
     const formattedPhone = formatPhoneNumber(phoneNumber);
 
     // Create payment record
-    const [payment] = await db
-      .insert(payments)
-      .values({
-        booking_id: bookingId,
-        amount: amount.toString(),
-        currency: 'KES',
-        payment_method: 'mpesa',
-        mpesa_phone_number: formattedPhone,
-        status: 'pending',
-      })
-      .returning();
+    const [payment] = await withTenantDb((tx) =>
+      tx
+        .insert(payments)
+        .values({
+          tenant_id: currentTenantId(),
+          booking_id: bookingId,
+          amount: amount.toString(),
+          currency: 'KES',
+          payment_method: 'mpesa',
+          mpesa_phone_number: formattedPhone,
+          status: 'pending',
+        })
+        .returning()
+    );
 
     // STK Push request payload
     const payload = {
@@ -153,14 +157,16 @@ export const initiateSTKPush = async ({
     );
 
     // Update payment with M-Pesa response
-    await db
-      .update(payments)
-      .set({
-        merchant_request_id: response.data.MerchantRequestID,
-        checkout_request_id: response.data.CheckoutRequestID,
-        response_data: JSON.stringify(response.data),
-      })
-      .where(eq(payments.id, payment.id));
+    await withTenantDb((tx) =>
+      tx
+        .update(payments)
+        .set({
+          merchant_request_id: response.data.MerchantRequestID,
+          checkout_request_id: response.data.CheckoutRequestID,
+          response_data: JSON.stringify(response.data),
+        })
+        .where(eq(payments.id, payment.id))
+    );
 
     logger.info('STK Push initiated successfully:', response.data);
 
@@ -211,11 +217,13 @@ export const handleMpesaCallback = async (callbackData) => {
       stkCallback;
 
     // Find payment by checkout request ID
-    const [payment] = await db
-      .select()
-      .from(payments)
-      .where(eq(payments.checkout_request_id, CheckoutRequestID))
-      .limit(1);
+    const [payment] = await withTenantDb((tx) =>
+      tx
+        .select()
+        .from(payments)
+        .where(eq(payments.checkout_request_id, CheckoutRequestID))
+        .limit(1)
+    );
 
     if (!payment) {
       logger.error(
@@ -240,36 +248,47 @@ export const handleMpesaCallback = async (callbackData) => {
       )?.Value;
 
       // Update payment as completed
-      await db
-        .update(payments)
-        .set({
-          status: 'completed',
-          mpesa_receipt_number: mpesaReceiptNumber,
-          mpesa_phone_number: phoneNumber?.toString(),
-          completed_at: new Date(),
-          response_data: JSON.stringify(callbackData),
-        })
-        .where(eq(payments.id, payment.id));
+      const [completedPayment] = await withTenantDb((tx) =>
+        tx
+          .update(payments)
+          .set({
+            status: 'completed',
+            mpesa_receipt_number: mpesaReceiptNumber,
+            mpesa_phone_number: phoneNumber?.toString(),
+            completed_at: new Date(),
+            response_data: JSON.stringify(callbackData),
+          })
+          .where(eq(payments.id, payment.id))
+          .returning()
+      );
+
+      // Money has moved: record it in the ledger and spend it against the
+      // booking's receivable. Never throws.
+      await recordBookingSettlement({ payment: completedPayment ?? payment });
 
       // Update booking payment status
-      await db
-        .update(bookings)
-        .set({
-          payment_status: 'paid',
-          payment_method: 'mpesa',
-          payment_id: mpesaReceiptNumber,
-          status: 'confirmed',
-          updated_at: new Date(),
-        })
-        .where(eq(bookings.id, payment.booking_id));
+      await withTenantDb((tx) =>
+        tx
+          .update(bookings)
+          .set({
+            payment_status: 'paid',
+            payment_method: 'mpesa',
+            payment_id: mpesaReceiptNumber,
+            status: 'confirmed',
+            updated_at: new Date(),
+          })
+          .where(eq(bookings.id, payment.booking_id))
+      );
 
       // ✅ Get complete booking with tour details for email
-      const booking = await db.query.bookings.findFirst({
-        where: eq(bookings.id, payment.booking_id),
-        with: {
-          tour: true,
-        },
-      });
+      const booking = await withTenantDb((tx) =>
+        tx.query.bookings.findFirst({
+          where: eq(bookings.id, payment.booking_id),
+          with: {
+            tour: true,
+          },
+        })
+      );
 
       // ✅ Send payment confirmation email with invoice
       if (booking) {
@@ -319,13 +338,15 @@ export const handleMpesaCallback = async (callbackData) => {
       };
     } else {
       // Payment failed
-      await db
-        .update(payments)
-        .set({
-          status: 'failed',
-          response_data: JSON.stringify(callbackData),
-        })
-        .where(eq(payments.id, payment.id));
+      await withTenantDb((tx) =>
+        tx
+          .update(payments)
+          .set({
+            status: 'failed',
+            response_data: JSON.stringify(callbackData),
+          })
+          .where(eq(payments.id, payment.id))
+      );
 
       logger.error('Payment failed:', { ResultCode, ResultDesc });
 

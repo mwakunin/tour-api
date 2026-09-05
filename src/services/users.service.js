@@ -1,5 +1,9 @@
 import logger from '#config/logger.js';
-import { db } from '#config/database.js';
+// Better Auth's `user` table is global — no tenant_id, no policy, nothing to
+// leak by operator, and a person may work for two of them. It still goes
+// through the RLS-constrained connection: the policied tables stay policied
+// here, so this is not a back door, just the right pool.
+import { appDb } from '#config/appDatabase.js';
 import { user } from '#models/user.model.js';
 import { eq, or, ilike } from 'drizzle-orm';
 
@@ -8,7 +12,7 @@ export const getAllUsers = async (filters = {}) => {
     const { search, role, limit = 100, offset = 0 } = filters;
 
     // Start building the query
-    let query = db
+    let query = appDb
       .select({
         id: user.id,
         email: user.email,
@@ -53,7 +57,7 @@ export const getAllUsers = async (filters = {}) => {
 
 export const getUserById = async (id) => {
   try {
-    const [foundUser] = await db
+    const [foundUser] = await appDb
       .select({
         id: user.id,
         email: user.email,
@@ -84,7 +88,7 @@ export const updateUser = async (id, updates) => {
 
     // Check if email is being updated and if it already exists
     if (updates.email && updates.email !== existingUser.email) {
-      const [emailExists] = await db
+      const [emailExists] = await appDb
         .select()
         .from(user)
         .where(eq(user.email, updates.email))
@@ -100,7 +104,7 @@ export const updateUser = async (id, updates) => {
       updatedAt: new Date(),
     };
 
-    const [updatedUser] = await db
+    const [updatedUser] = await appDb
       .update(user)
       .set(updateData)
       .where(eq(user.id, id))
@@ -126,7 +130,7 @@ export const deleteUser = async (id) => {
     // First check if user exists
     await getUserById(id);
 
-    const [deletedUser] = await db
+    const [deletedUser] = await appDb
       .delete(user)
       .where(eq(user.id, id))
       .returning({
@@ -150,7 +154,7 @@ export const getUserStats = async () => {
   try {
     logger.info('Getting user statistics...');
 
-    const allUsers = await db.select().from(user);
+    const allUsers = await appDb.select().from(user);
 
     const total = allUsers.length;
     const admins = allUsers.filter((u) => u.role === 'admin').length;

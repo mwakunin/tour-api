@@ -14,6 +14,7 @@ import {
   deleteTestUser,
   deleteTestAdmin,
 } from '../helpers/auth.helper.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 describe('Blog API Integration Tests', () => {
   let agent;
@@ -42,6 +43,7 @@ describe('Blog API Integration Tests', () => {
     const [category] = await db
       .insert(blogCategories)
       .values({
+        tenant_id: SEED_TENANT_ID,
         name: `Test Category ${Date.now()}`,
         slug: `test-category-${Date.now()}`,
         description: 'A test category',
@@ -77,6 +79,7 @@ describe('Blog API Integration Tests', () => {
       const [published] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Published Post',
           slug: `published-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -89,6 +92,7 @@ describe('Blog API Integration Tests', () => {
       const [draft] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Draft Post',
           slug: `draft-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -132,6 +136,7 @@ describe('Blog API Integration Tests', () => {
       const [post] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Findable Post',
           slug: `findable-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -155,6 +160,7 @@ describe('Blog API Integration Tests', () => {
       const [draft] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Hidden Draft',
           slug: `hidden-draft-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -200,6 +206,7 @@ describe('Blog API Integration Tests', () => {
       const [draft] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Admin Visible Draft',
           slug: `admin-draft-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -300,6 +307,7 @@ describe('Blog API Integration Tests', () => {
       const [post] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Original Title Goes Here',
           slug: `update-me-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -335,6 +343,7 @@ describe('Blog API Integration Tests', () => {
       const [post] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Post To Be Deleted Here',
           slug: `delete-me-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -357,6 +366,7 @@ describe('Blog API Integration Tests', () => {
       const [post] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Protected Post Right Here',
           slug: `protected-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -381,6 +391,7 @@ describe('Blog API Integration Tests', () => {
       const [post] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Post With A Real Author',
           slug: `authored-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -454,6 +465,7 @@ describe('Blog API Integration Tests', () => {
       const [category] = await db
         .insert(blogCategories)
         .values({
+          tenant_id: SEED_TENANT_ID,
           name: `Category In Use ${Date.now()}`,
           slug: `category-in-use-${Date.now()}`,
         })
@@ -462,6 +474,7 @@ describe('Blog API Integration Tests', () => {
       const [post] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Post In A Category Right Here',
           slug: `categorized-${Date.now()}`,
           excerpt: 'x'.repeat(60),
@@ -486,6 +499,7 @@ describe('Blog API Integration Tests', () => {
       const [category] = await db
         .insert(blogCategories)
         .values({
+          tenant_id: SEED_TENANT_ID,
           name: `Empty Category ${Date.now()}`,
           slug: `empty-category-${Date.now()}`,
         })

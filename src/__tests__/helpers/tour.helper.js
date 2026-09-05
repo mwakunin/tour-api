@@ -4,6 +4,7 @@
 import { db } from '#config/database.js';
 import { tours } from '#models/tour.model.js';
 import { eq } from 'drizzle-orm';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 /**
  * Create a test tour with a unique slug and title by default.
@@ -43,6 +44,7 @@ export const createTestTour = async (overrides = {}) => {
   const defaultSlug = `test-safari-tour-${uniqueSuffix}`;
 
   const tourData = {
+    tenant_id: SEED_TENANT_ID,
     title: defaultTitle, // Now unique!
     slug: defaultSlug, // Now unique!
     overview:

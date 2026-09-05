@@ -23,6 +23,7 @@ jest.mock('#utils/invoiceGenerator.js', () => ({
 
 // ✅ FIX 2: Import emailService AFTER mocking dependencies
 import { emailService } from '#services/email.service.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 // ✅ FIX 3: Spy on emailService methods directly (don't mock Resend)
 let sendContactFormEmailSpy;
@@ -469,6 +470,7 @@ async function createTestDestination() {
   const [destination] = await db
     .insert(destinations)
     .values({
+      tenant_id: SEED_TENANT_ID,
       title: `Test Destination ${Date.now()}`,
       slug: `test-destination-${Date.now()}`,
       description: 'A beautiful test destination for email testing',
@@ -486,18 +488,19 @@ async function createTestTour() {
   const [tour] = await db
     .insert(tours)
     .values({
+      tenant_id: SEED_TENANT_ID,
       title: `Test Tour ${timestamp}`,
       slug: `test-tour-${timestamp}`,
       overview:
         'A comprehensive test tour for email testing with all required fields.',
-        itinerary: [
-          {
-            day: 1,
-            title: 'Day 1',
-            description: 'Test itinerary',
-            activities: ['Activity 1'],
-          },
-        ],
+      itinerary: [
+        {
+          day: 1,
+          title: 'Day 1',
+          description: 'Test itinerary',
+          activities: ['Activity 1'],
+        },
+      ],
       duration: 3,
       duration_unit: 'days',
       price_amount: '1000.00',
@@ -517,6 +520,7 @@ async function createTestBooking(tourId, userId) {
   const [booking] = await db
     .insert(bookings)
     .values({
+      tenant_id: SEED_TENANT_ID,
       booking_reference: bookingRef,
       tour_id: tourId,
       user_id: userId,

@@ -1,5 +1,6 @@
 // src/__tests__/integration/uploads.test.js
 import { jest } from '@jest/globals';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 // The real SDK, used only to build URLs — buildSrc is pure string work with no
 // network, so mocking it would hide exactly the kind of bug it once had
@@ -291,6 +292,7 @@ describe('Upload API Integration Tests', () => {
       const [file] = await db
         .insert(files)
         .values({
+          tenant_id: SEED_TENANT_ID,
           fileId: `test-file-${Date.now()}`,
           fileName: 'test.jpg',
           originalName: 'original-test.jpg',
@@ -340,6 +342,7 @@ describe('Upload API Integration Tests', () => {
   describe('GET /api/uploads/folder/:folder - Get Files by Folder', () => {
     beforeEach(async () => {
       const fileData = [1, 2, 3].map((i) => ({
+        tenant_id: SEED_TENANT_ID,
         fileId: `test-tour-file-${Date.now()}-${i}`,
         fileName: `tour-${i}.jpg`,
         originalName: `original-tour-${i}.jpg`,
@@ -395,6 +398,7 @@ describe('Upload API Integration Tests', () => {
       const [file] = await db
         .insert(files)
         .values({
+          tenant_id: SEED_TENANT_ID,
           fileId: `test-image-${Date.now()}`,
           fileName: 'test-image.jpg',
           originalName: 'original-image.jpg',
@@ -451,6 +455,7 @@ describe('Upload API Integration Tests', () => {
       const [videoFile] = await db
         .insert(files)
         .values({
+          tenant_id: SEED_TENANT_ID,
           fileId: `test-video-${Date.now()}`,
           fileName: 'test-video.mp4',
           originalName: 'original-video.mp4',
@@ -492,6 +497,7 @@ describe('Upload API Integration Tests', () => {
       const [file] = await db
         .insert(files)
         .values({
+          tenant_id: SEED_TENANT_ID,
           fileId: `responsive-${Date.now()}`,
           fileName: 'responsive.jpg',
           originalName: 'original-responsive.jpg',
@@ -554,6 +560,7 @@ describe('Upload API Integration Tests', () => {
       const [file] = await db
         .insert(files)
         .values({
+          tenant_id: SEED_TENANT_ID,
           fileId: `delete-me-${Date.now()}`,
           fileName: 'delete-me.jpg',
           originalName: 'original-delete.jpg',

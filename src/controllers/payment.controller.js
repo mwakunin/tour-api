@@ -7,10 +7,8 @@ import {
 } from '#services/payment.service.js';
 import { handleMpesaCallback } from '#services/mpesa.service.js';
 import { handlePaystackWebhook } from '#services/paystack.service.js';
-import {
-  handlePesapalIPN,
-} from '#services/pesapal.service.js';
-import { db } from '#config/database.js';
+import { handlePesapalIPN } from '#services/pesapal.service.js';
+import { withTenantDb } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { eq } from 'drizzle-orm';
 import logger from '#config/logger.js';
@@ -43,12 +41,14 @@ export const initiatePayment = async (req, res, next) => {
     });
 
     // Get booking with tour details
-    const booking = await db.query.bookings.findFirst({
-      where: eq(bookings.id, validatedData.booking_id),
-      with: {
-        tour: true,
-      },
-    });
+    const booking = await withTenantDb((tx) =>
+      tx.query.bookings.findFirst({
+        where: eq(bookings.id, validatedData.booking_id),
+        with: {
+          tour: true,
+        },
+      })
+    );
 
     if (!booking) {
       return res.status(404).json({
@@ -130,9 +130,11 @@ export const getPaymentStatus = async (req, res, next) => {
       });
     }
 
-    const booking = await db.query.bookings.findFirst({
-      where: eq(bookings.id, bookingId),
-    });
+    const booking = await withTenantDb((tx) =>
+      tx.query.bookings.findFirst({
+        where: eq(bookings.id, bookingId),
+      })
+    );
 
     if (!booking) {
       return res.status(404).json({

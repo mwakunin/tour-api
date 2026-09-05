@@ -1,12 +1,13 @@
 import axios from 'axios';
 import crypto from 'crypto';
 import logger from '#config/logger.js';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { payments } from '#models/payment.model.js';
 import { eq } from 'drizzle-orm';
 import { emailService } from './email.service.js';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
+import { recordBookingSettlement } from './bookingLedger.service.js';
 
 const PESAPAL_LIVE_URL = 'https://pay.pesapal.com/v3';
 const PESAPAL_SANDBOX_URL = 'https://cybqa.pesapal.com/pesapalv3';
@@ -292,6 +293,7 @@ export async function initializePesapalPayment({
 
     // Create payment record
     const paymentRecord = {
+      tenant_id: currentTenantId(),
       id: crypto.randomUUID(),
       booking_id: bookingId,
       amount: amount.toString(),
@@ -305,7 +307,7 @@ export async function initializePesapalPayment({
       created_at: new Date(),
     };
 
-    await db.insert(payments).values(paymentRecord);
+    await withTenantDb((tx) => tx.insert(payments).values(paymentRecord));
 
     logger.info('Pesapal payment initialized:', {
       bookingId,
@@ -361,9 +363,11 @@ export async function verifyPesapalPayment(orderTrackingId) {
       status: payment_status_description,
     });
 
-    const payment = await db.query.payments.findFirst({
-      where: eq(payments.pesapal_tracking_id, orderTrackingId),
-    });
+    const payment = await withTenantDb((tx) =>
+      tx.query.payments.findFirst({
+        where: eq(payments.pesapal_tracking_id, orderTrackingId),
+      })
+    );
 
     if (!payment) {
       throw new Error('Payment record not found');
@@ -419,25 +423,35 @@ export async function handlePesapalIPN(data) {
  */
 async function handleSuccessfulPayment(bookingId, trackingId, transactionData) {
   try {
-    await db
-      .update(payments)
-      .set({
-        status: 'completed',
-        completed_at: new Date(),
-        response_data: JSON.stringify(transactionData),
-      })
-      .where(eq(payments.pesapal_tracking_id, trackingId));
+    const [completedPayment] = await withTenantDb((tx) =>
+      tx
+        .update(payments)
+        .set({
+          status: 'completed',
+          completed_at: new Date(),
+          response_data: JSON.stringify(transactionData),
+        })
+        .where(eq(payments.pesapal_tracking_id, trackingId))
+        .returning()
+    );
 
-    const [updatedBooking] = await db
-      .update(bookings)
-      .set({
-        payment_status: 'paid',
-        status: 'confirmed',
-        confirmed_at: new Date(),
-        updated_at: new Date(),
-      })
-      .where(eq(bookings.id, bookingId))
-      .returning();
+    // Money has moved: record it and spend it against the receivable.
+    if (completedPayment) {
+      await recordBookingSettlement({ payment: completedPayment });
+    }
+
+    const [updatedBooking] = await withTenantDb((tx) =>
+      tx
+        .update(bookings)
+        .set({
+          payment_status: 'paid',
+          status: 'confirmed',
+          confirmed_at: new Date(),
+          updated_at: new Date(),
+        })
+        .where(eq(bookings.id, bookingId))
+        .returning()
+    );
 
     if (!updatedBooking) {
       throw new Error('Failed to update booking');
@@ -471,10 +485,12 @@ async function handleSuccessfulPayment(bookingId, trackingId, transactionData) {
  */
 async function handleFailedPayment(bookingId, trackingId) {
   try {
-    await db
-      .update(payments)
-      .set({ status: 'failed' })
-      .where(eq(payments.pesapal_tracking_id, trackingId));
+    await withTenantDb((tx) =>
+      tx
+        .update(payments)
+        .set({ status: 'failed' })
+        .where(eq(payments.pesapal_tracking_id, trackingId))
+    );
 
     logger.info('Pesapal payment marked as failed:', { bookingId, trackingId });
   } catch (error) {

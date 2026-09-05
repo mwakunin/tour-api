@@ -20,6 +20,7 @@ import {
 import { buildTestPricingPeriod } from '../helpers/tour.helper.js';
 import { cache } from '#utils/cache.js';
 import { CacheKeys } from '#utils/cacheKeys.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 describe('Tour CRUD Integration Tests', () => {
   beforeAll(async () => {
@@ -146,7 +147,9 @@ describe('Tour CRUD Integration Tests', () => {
       );
       // discount_percentage is DERIVED from the compare-at prices — none was sent
       expect(response.body.data.pricing.discount_percentage).toBe(25);
-      expect(response.body.data.pricing_periods[0].pricing_tiers[0].price_per_person).toBe(600);
+      expect(
+        response.body.data.pricing_periods[0].pricing_tiers[0].price_per_person
+      ).toBe(600);
       // The festive period must survive the year boundary intact
       expect(response.body.data.pricing_periods[1].end_date).toBe('2027-01-02');
     });
@@ -322,6 +325,7 @@ describe('Tour CRUD Integration Tests', () => {
       const [tour] = await db
         .insert(tours)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Public Test Tour',
           slug: `public-tour-${Date.now()}`,
           overview:
@@ -341,6 +345,7 @@ describe('Tour CRUD Integration Tests', () => {
 
       // Link tour to destination
       await db.insert(tourDestinations).values({
+        tenant_id: SEED_TENANT_ID,
         tour_id: tour.id,
         destination_id: testDestination.id,
         order: 0,
@@ -421,6 +426,7 @@ describe('Tour CRUD Integration Tests', () => {
       const [tour] = await db
         .insert(tours)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Single Tour Test',
           slug: `single-tour-${Date.now()}`,
           overview:
@@ -451,6 +457,7 @@ describe('Tour CRUD Integration Tests', () => {
       testTour = tour;
 
       await db.insert(tourDestinations).values({
+        tenant_id: SEED_TENANT_ID,
         tour_id: tour.id,
         destination_id: testDestination.id,
         order: 0,
@@ -527,6 +534,7 @@ describe('Tour CRUD Integration Tests', () => {
       const [tour] = await db
         .insert(tours)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Tour to Update',
           slug: `update-tour-${Date.now()}`,
           overview:
@@ -643,6 +651,7 @@ describe('Tour CRUD Integration Tests', () => {
       const [tour] = await db
         .insert(tours)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Tour to Delete',
           slug: `delete-tour-${Date.now()}`,
           overview:
@@ -714,6 +723,7 @@ describe('Tour CRUD Integration Tests', () => {
       const [tour] = await db
         .insert(tours)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Featured Deal Tour',
           slug: `special-tour-${Date.now()}`,
           overview:
@@ -766,6 +776,7 @@ describe('Tour CRUD Integration Tests', () => {
       const [expired] = await db
         .insert(tours)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Expired Promo Tour',
           slug: `expired-promo-${Date.now()}`,
           overview:
@@ -819,6 +830,7 @@ describe('Tour CRUD Integration Tests', () => {
       const [withDest] = await db
         .insert(tours)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Deal With Destination',
           slug: `deal-with-destination-${Date.now()}`,
           overview:
@@ -836,6 +848,7 @@ describe('Tour CRUD Integration Tests', () => {
         .returning();
 
       await db.insert(tourDestinations).values({
+        tenant_id: SEED_TENANT_ID,
         tour_id: withDest.id,
         destination_id: destination.id,
         order: 0,

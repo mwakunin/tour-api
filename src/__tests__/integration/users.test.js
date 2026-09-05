@@ -15,6 +15,7 @@ import {
   createAuthenticatedAgent,
   createAuthenticatedAdminAgent,
 } from '../helpers/auth.helper.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 
 describe('User/Admin CRUD Tests', () => {
   beforeAll(async () => {
@@ -409,6 +410,7 @@ describe('User/Admin CRUD Tests', () => {
       const [post] = await db
         .insert(blogPosts)
         .values({
+          tenant_id: SEED_TENANT_ID,
           title: 'Test Post',
           slug: `test-post-${Date.now()}`,
           excerpt: 'A short excerpt for the test post.',

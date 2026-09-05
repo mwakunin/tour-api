@@ -13,7 +13,7 @@ import {
   getBookingTrends,
 } from '#services/booking.service.js';
 import logger from '#config/logger.js';
-import { db } from '#config/database.js';
+import { withTenantDb } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { eq } from 'drizzle-orm';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
@@ -409,14 +409,16 @@ export const updateBookingController = async (req, res, next) => {
       );
     }
 
-    const [updated] = await db
-      .update(bookings)
-      .set({
-        ...updateData,
-        updated_at: new Date(),
-      })
-      .where(eq(bookings.id, bookingId))
-      .returning();
+    const [updated] = await withTenantDb((tx) =>
+      tx
+        .update(bookings)
+        .set({
+          ...updateData,
+          updated_at: new Date(),
+        })
+        .where(eq(bookings.id, bookingId))
+        .returning()
+    );
 
     // Invalidate cache
     await invalidateBooking(

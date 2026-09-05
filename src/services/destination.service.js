@@ -1,6 +1,6 @@
 // src/services/destination.service.js
 import { eq, and, or, sql, ilike } from 'drizzle-orm';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { destinations } from '#models/destination.model.js';
 import {
   validateDestination,
@@ -22,13 +22,18 @@ export const createDestination = async (data) => {
   try {
     const validated = validateDestination(data);
 
-    const [destination] = await db
-      .insert(destinations)
-      .values({
-        ...validated,
-        updated_at: new Date(),
-      })
-      .returning();
+    const [destination] = await withTenantDb((tx) =>
+      tx
+        .insert(destinations)
+        .values({
+          // Explicit, not leaning on the column DEFAULT — relying on that is the
+          // silent cross-tenant write this whole change exists to remove.
+          tenant_id: currentTenantId(),
+          ...validated,
+          updated_at: new Date(),
+        })
+        .returning()
+    );
 
     // Invalidate list caches after creation
     await cache.delPattern(CacheKeys.patterns.destinationLists());
@@ -105,21 +110,23 @@ export const getDestinations = async (filters = {}) => {
         const sortOrder = normalizedFilters.sort_order || 'desc';
 
         // Execute query with tour counts
-        const results = await db.query.destinations.findMany({
-          where: whereClause,
-          orderBy: (destinations, { asc, desc }) => [
-            sortOrder === 'asc'
-              ? asc(destinations[sortBy])
-              : desc(destinations[sortBy]),
-          ],
-          limit: normalizedFilters.limit || 100,
-          offset: normalizedFilters.offset || 0,
-          with: {
-            tourDestinations: {
-              columns: { id: true },
+        const results = await withTenantDb((tx) =>
+          tx.query.destinations.findMany({
+            where: whereClause,
+            orderBy: (destinations, { asc, desc }) => [
+              sortOrder === 'asc'
+                ? asc(destinations[sortBy])
+                : desc(destinations[sortBy]),
+            ],
+            limit: normalizedFilters.limit || 100,
+            offset: normalizedFilters.offset || 0,
+            with: {
+              tourDestinations: {
+                columns: { id: true },
+              },
             },
-          },
-        });
+          })
+        );
 
         // Transform to include tour count
         return results.map((dest) => ({
@@ -146,11 +153,9 @@ export const getDestinationById = async (id) => {
 
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const [destination] = await db
-          .select()
-          .from(destinations)
-          .where(eq(destinations.id, id))
-          .limit(1);
+        const [destination] = await withTenantDb((tx) =>
+          tx.select().from(destinations).where(eq(destinations.id, id)).limit(1)
+        );
 
         return destination || null;
       });
@@ -172,11 +177,13 @@ export const getDestinationBySlug = async (slug) => {
 
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const [destination] = await db
-          .select()
-          .from(destinations)
-          .where(eq(destinations.slug, slug))
-          .limit(1);
+        const [destination] = await withTenantDb((tx) =>
+          tx
+            .select()
+            .from(destinations)
+            .where(eq(destinations.slug, slug))
+            .limit(1)
+        );
 
         return destination || null;
       });
@@ -192,22 +199,24 @@ export const getDestinationWithTours = async (id) => {
     const cacheKey = CacheKeys.destinationTours(id);
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const destination = await db.query.destinations.findFirst({
-          where: eq(destinations.id, id),
-          with: {
-            tourDestinations: {
-              with: {
-                tour: {
-                  where: (tours, { eq }) => eq(tours.status, 'published'),
-                  // ✅ REMOVE columns restriction to get all fields
+        const destination = await withTenantDb((tx) =>
+          tx.query.destinations.findFirst({
+            where: eq(destinations.id, id),
+            with: {
+              tourDestinations: {
+                with: {
+                  tour: {
+                    where: (tours, { eq }) => eq(tours.status, 'published'),
+                    // ✅ REMOVE columns restriction to get all fields
+                  },
                 },
+                orderBy: (tourDestinations, { asc }) => [
+                  asc(tourDestinations.order),
+                ],
               },
-              orderBy: (tourDestinations, { asc }) => [
-                asc(tourDestinations.order),
-              ],
             },
-          },
-        });
+          })
+        );
 
         if (!destination) {
           return null;
@@ -238,14 +247,16 @@ export const updateDestination = async (id, data) => {
   try {
     const validated = validateDestinationUpdate(data);
 
-    const [updated] = await db
-      .update(destinations)
-      .set({
-        ...validated,
-        updated_at: new Date(),
-      })
-      .where(eq(destinations.id, id))
-      .returning();
+    const [updated] = await withTenantDb((tx) =>
+      tx
+        .update(destinations)
+        .set({
+          ...validated,
+          updated_at: new Date(),
+        })
+        .where(eq(destinations.id, id))
+        .returning()
+    );
 
     if (updated) {
       // Invalidate all related caches
@@ -272,15 +283,17 @@ export const updateDestination = async (id, data) => {
 export const deleteDestination = async (id) => {
   try {
     // ✅ CHANGED: Check if destination has tours through junction table
-    const destination = await db.query.destinations.findFirst({
-      where: eq(destinations.id, id),
-      with: {
-        tourDestinations: {
-          columns: { id: true },
-          limit: 1,
+    const destination = await withTenantDb((tx) =>
+      tx.query.destinations.findFirst({
+        where: eq(destinations.id, id),
+        with: {
+          tourDestinations: {
+            columns: { id: true },
+            limit: 1,
+          },
         },
-      },
-    });
+      })
+    );
 
     if (!destination) {
       throw new Error('Destination not found');
@@ -296,7 +309,9 @@ export const deleteDestination = async (id) => {
       );
     }
 
-    await db.delete(destinations).where(eq(destinations.id, id));
+    await withTenantDb((tx) =>
+      tx.delete(destinations).where(eq(destinations.id, id))
+    );
 
     // Invalidate all related caches
     await invalidateDestination(destination.id, destination.slug);
@@ -325,21 +340,23 @@ export const getDestinationStats = async (id) => {
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
         // ✅ CHANGED: Get tours through junction table
-        const destination = await db.query.destinations.findFirst({
-          where: eq(destinations.id, id),
-          with: {
-            tourDestinations: {
-              with: {
-                tour: {
-                  columns: {
-                    id: true,
-                    status: true,
+        const destination = await withTenantDb((tx) =>
+          tx.query.destinations.findFirst({
+            where: eq(destinations.id, id),
+            with: {
+              tourDestinations: {
+                with: {
+                  tour: {
+                    columns: {
+                      id: true,
+                      status: true,
+                    },
                   },
                 },
               },
             },
-          },
-        });
+          })
+        );
 
         if (!destination) {
           throw new Error('Destination not found');
@@ -376,7 +393,8 @@ export const getRevenueBreakdown = async () => {
 
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
-        const result = await db.execute(sql`
+        const result = await withTenantDb((tx) =>
+          tx.execute(sql`
           WITH destination_revenue AS (
             SELECT 
               d.id,
@@ -401,7 +419,8 @@ export const getRevenueBreakdown = async () => {
           FROM destination_revenue dr
           CROSS JOIN total t
           ORDER BY dr.revenue DESC;
-        `);
+        `)
+        );
         const destinations = result.map((row) => ({
           name: row.name,
           revenue: parseFloat(row.revenue),

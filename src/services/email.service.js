@@ -2,7 +2,7 @@
 import { Resend } from 'resend';
 import logger from '#config/logger.js';
 import { generateInvoicePDF } from '../utils/invoiceGenerator.js';
-import { db } from '#config/database.js';
+import { withTenantDb } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { and, gte, lte } from 'drizzle-orm';
 
@@ -529,6 +529,11 @@ class EmailService {
   }
 
   // ✅ Daily booking summary
+  //
+  // Must be called inside runWithTenant: it runs from a scheduler rather than
+  // a request, so there is no middleware to inherit a tenant from. Unscoped,
+  // it would put one operator's bookings and revenue into another operator's
+  // summary email — see jobs/dailySummary.js, which iterates operators.
   async sendDailyBookingSummary() {
     try {
       const today = new Date();
@@ -537,13 +542,15 @@ class EmailService {
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
 
-      const todaysBookings = await db.query.bookings.findMany({
-        where: and(
-          gte(bookings.created_at, today),
-          lte(bookings.created_at, tomorrow)
-        ),
-        with: { tour: true },
-      });
+      const todaysBookings = await withTenantDb((tx) =>
+        tx.query.bookings.findMany({
+          where: and(
+            gte(bookings.created_at, today),
+            lte(bookings.created_at, tomorrow)
+          ),
+          with: { tour: true },
+        })
+      );
 
       if (todaysBookings.length === 0) {
         return; // No bookings today

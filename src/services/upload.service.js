@@ -1,7 +1,7 @@
 // src/services/upload.service.js
 import imagekit, { urlEndpoint } from '#config/imagekit.js';
 import { toFile } from '@imagekit/nodejs';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { files } from '#models/file.model.js';
 import { and, count, desc, eq, ilike, or } from 'drizzle-orm';
 import { cache } from '#utils/cache.js';
@@ -50,31 +50,34 @@ export const uploadFile = async (file, options = {}) => {
       responseFields: ['metadata'],
     });
 
-    const [fileRecord] = await db
-      .insert(files)
-      .values({
-        fileId: result.fileId,
-        fileName: result.name,
-        originalName: file.originalname,
-        url: result.url,
-        thumbnailUrl: result.thumbnailUrl || null,
-        folder,
-        fileType: file.mimetype.split('/')[0],
-        mimeType: file.mimetype,
-        size: result.size || file.size,
-        // ImageKit measures the image during upload, so these come free with
-        // the response — no sharp, no second decode. Null for video/raw, where
-        // ImageKit reports no dimensions.
-        width: result.width ?? null,
-        height: result.height ?? null,
-        tags: [folder, ...tags],
-        metadata: {
-          hasAlpha: result.metadata?.hasTransparency ?? null,
-          orientation: result.metadata?.exif?.image?.Orientation ?? null,
-        },
-        uploadedBy: userId,
-      })
-      .returning();
+    const [fileRecord] = await withTenantDb((tx) =>
+      tx
+        .insert(files)
+        .values({
+          tenant_id: currentTenantId(),
+          fileId: result.fileId,
+          fileName: result.name,
+          originalName: file.originalname,
+          url: result.url,
+          thumbnailUrl: result.thumbnailUrl || null,
+          folder,
+          fileType: file.mimetype.split('/')[0],
+          mimeType: file.mimetype,
+          size: result.size || file.size,
+          // ImageKit measures the image during upload, so these come free with
+          // the response — no sharp, no second decode. Null for video/raw, where
+          // ImageKit reports no dimensions.
+          width: result.width ?? null,
+          height: result.height ?? null,
+          tags: [folder, ...tags],
+          metadata: {
+            hasAlpha: result.metadata?.hasTransparency ?? null,
+            orientation: result.metadata?.exif?.image?.Orientation ?? null,
+          },
+          uploadedBy: userId,
+        })
+        .returning()
+    );
 
     // Invalidate caches after upload
     await cache.del(CacheKeys.filesByFolder(folder));
@@ -145,7 +148,9 @@ export const uploadMultipleFiles = async (filesArray, options = {}) => {
 const deleteFile = async (fileId) => {
   try {
     await imagekit.files.delete(fileId);
-    await db.delete(files).where(eq(files.fileId, fileId));
+    await withTenantDb((tx) =>
+      tx.delete(files).where(eq(files.fileId, fileId))
+    );
 
     logger.info(`File deleted: ${fileId}`);
     return { success: true, fileId };
@@ -162,7 +167,9 @@ const deleteFile = async (fileId) => {
 export const deleteFileById = async (id) => {
   try {
     const [fileRecord] = await withRetry(() => {
-      return db.select().from(files).where(eq(files.id, id));
+      return withTenantDb((tx) =>
+        tx.select().from(files).where(eq(files.id, id))
+      );
     });
 
     if (!fileRecord) {
@@ -180,7 +187,7 @@ export const deleteFileById = async (id) => {
     }
 
     // Always delete from database
-    await db.delete(files).where(eq(files.id, id));
+    await withTenantDb((tx) => tx.delete(files).where(eq(files.id, id)));
 
     // Invalidate caches
     await invalidateFile(fileRecord.id, fileRecord.folder);
@@ -205,7 +212,9 @@ export const getFileById = async (id) => {
 
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const [file] = await db.select().from(files).where(eq(files.id, id));
+        const [file] = await withTenantDb((tx) =>
+          tx.select().from(files).where(eq(files.id, id))
+        );
 
         if (!file) {
           throw new Error('File not found');
@@ -229,11 +238,13 @@ export const getFilesByFolder = async (folder) => {
 
     return await cache.wrap(cacheKey, 1800, () => {
       return withRetry(async () => {
-        const folderFiles = await db
-          .select()
-          .from(files)
-          .where(eq(files.folder, folder))
-          .orderBy(files.createdAt);
+        const folderFiles = await withTenantDb((tx) =>
+          tx
+            .select()
+            .from(files)
+            .where(eq(files.folder, folder))
+            .orderBy(files.createdAt)
+        );
 
         logger.info(`Found ${folderFiles.length} files in folder: ${folder}`);
         return folderFiles;
@@ -305,26 +316,30 @@ export const listFiles = async ({
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
-    return await withRetry(async () => {
-      const rows = await db
-        .select()
-        .from(files)
-        .where(where)
-        .orderBy(desc(files.createdAt))
-        .limit(limit)
-        .offset((page - 1) * limit);
+    return await withRetry(() =>
+      withTenantDb(async (tx) => {
+        const rows = await tx
+          .select()
+          .from(files)
+          .where(where)
+          .orderBy(desc(files.createdAt))
+          .limit(limit)
+          .offset((page - 1) * limit);
 
-      // Separate count so the caller can page: rows is only the current slice.
-      const [totals] = await db
-        .select({ total: count() })
-        .from(files)
-        .where(where);
+        // Separate count so the caller can page: rows is only the current
+        // slice. Same transaction as the rows above, so a concurrent upload
+        // cannot make the total disagree with what the caller was handed.
+        const [totals] = await tx
+          .select({ total: count() })
+          .from(files)
+          .where(where);
 
-      return {
-        files: rows.map(formatFileResponse),
-        total: Number(totals?.total ?? 0),
-      };
-    });
+        return {
+          files: rows.map(formatFileResponse),
+          total: Number(totals?.total ?? 0),
+        };
+      })
+    );
   } catch (error) {
     logger.error(`Failed to list files:`, error);
     throw error;
@@ -358,14 +373,16 @@ export const deleteMultipleFiles = async (fileIds) => {
  */
 export const updateFileMetadata = async (id, updates) => {
   try {
-    const [updated] = await db
-      .update(files)
-      .set({
-        ...updates,
-        updatedAt: new Date(),
-      })
-      .where(eq(files.id, id))
-      .returning();
+    const [updated] = await withTenantDb((tx) =>
+      tx
+        .update(files)
+        .set({
+          ...updates,
+          updatedAt: new Date(),
+        })
+        .where(eq(files.id, id))
+        .returning()
+    );
 
     if (updated) {
       // Invalidate caches

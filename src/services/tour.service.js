@@ -12,7 +12,7 @@ import {
   ilike,
   inArray,
 } from 'drizzle-orm';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { tours, tourDestinations } from '#models/tour.model.js';
 import {
   validateTour,
@@ -119,6 +119,10 @@ export const createTour = async (data) => {
     // discount_percentage is DERIVED from the compare-at prices, never taken
     // from client input, so it can't drift from the tiers it describes.
     const tourData = {
+      // Explicit rather than relying on the column DEFAULT — that default is a
+      // temporary crutch and leaning on it is the silent cross-tenant write
+      // this change exists to remove.
+      tenant_id: currentTenantId(),
       ...validated,
       price_amount: validated.pricing?.amount?.toString() ?? null,
       price_currency: validated.pricing?.currency ?? null,
@@ -140,17 +144,22 @@ export const createTour = async (data) => {
     const destinationIds = validated.destination_ids || [];
 
     // Insert tour and get the created tour
-    const [tour] = await db.insert(tours).values(tourData).returning();
+    const [tour] = await withTenantDb((tx) =>
+      tx.insert(tours).values(tourData).returning()
+    );
 
     // ✅ NEW: Insert tour-destination relationships if destinations provided
     if (destinationIds.length > 0) {
       const tourDestinationValues = destinationIds.map((destId, index) => ({
+        tenant_id: currentTenantId(),
         tour_id: tour.id,
         destination_id: destId,
         order: index, // Preserve order
       }));
 
-      await db.insert(tourDestinations).values(tourDestinationValues);
+      await withTenantDb((tx) =>
+        tx.insert(tourDestinations).values(tourDestinationValues)
+      );
     }
 
     // Invalidate list caches after creation
@@ -328,13 +337,15 @@ export const getTours = async (filters = {}) => {
                 : desc(tours.created_at);
         }
 
-        const results = await db
-          .select()
-          .from(tours)
-          .where(whereClause)
-          .orderBy(orderByClause)
-          .limit(normalizedFilters.limit || 100)
-          .offset(normalizedFilters.offset || 0);
+        const results = await withTenantDb((tx) =>
+          tx
+            .select()
+            .from(tours)
+            .where(whereClause)
+            .orderBy(orderByClause)
+            .limit(normalizedFilters.limit || 100)
+            .offset(normalizedFilters.offset || 0)
+        );
 
         return results.map(formatTourResponse);
       });
@@ -355,17 +366,19 @@ export const getTourById = async (id) => {
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
         // ✅ Use query API to include destinations
-        const tour = await db.query.tours.findFirst({
-          where: eq(tours.id, id),
-          with: {
-            tourDestinations: {
-              with: {
-                destination: true,
+        const tour = await withTenantDb((tx) =>
+          tx.query.tours.findFirst({
+            where: eq(tours.id, id),
+            with: {
+              tourDestinations: {
+                with: {
+                  destination: true,
+                },
+                orderBy: asc(tourDestinations.order),
               },
-              orderBy: asc(tourDestinations.order),
             },
-          },
-        });
+          })
+        );
 
         if (!tour) {
           return null;
@@ -394,17 +407,19 @@ export const getTourBySlug = async (slug) => {
     const cacheKey = CacheKeys.tourSlug(slug);
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const tour = await db.query.tours.findFirst({
-          where: eq(tours.slug, slug),
-          with: {
-            tourDestinations: {
-              with: {
-                destination: true,
+        const tour = await withTenantDb((tx) =>
+          tx.query.tours.findFirst({
+            where: eq(tours.slug, slug),
+            with: {
+              tourDestinations: {
+                with: {
+                  destination: true,
+                },
+                orderBy: asc(tourDestinations.order),
               },
-              orderBy: asc(tourDestinations.order),
             },
-          },
-        });
+          })
+        );
 
         if (!tour) {
           return null;
@@ -433,17 +448,19 @@ export const getTourWithDestinations = async (tourId) => {
     const cacheKey = CacheKeys.tourFull(tourId);
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const tour = await db.query.tours.findFirst({
-          where: eq(tours.id, tourId),
-          with: {
-            tourDestinations: {
-              with: {
-                destination: true,
+        const tour = await withTenantDb((tx) =>
+          tx.query.tours.findFirst({
+            where: eq(tours.id, tourId),
+            with: {
+              tourDestinations: {
+                with: {
+                  destination: true,
+                },
+                orderBy: asc(tourDestinations.order), // Respect the order
               },
-              orderBy: asc(tourDestinations.order), // Respect the order
             },
-          },
-        });
+          })
+        );
 
         if (!tour) {
           return null;
@@ -491,17 +508,21 @@ export const updateTour = async (id, data) => {
     updateData.updated_at = new Date();
 
     // ✅ NEW: Get old destinations BEFORE updating (for cache invalidation)
-    const oldTourDestinations = await db
-      .select({ destination_id: tourDestinations.destination_id })
-      .from(tourDestinations)
-      .where(eq(tourDestinations.tour_id, id));
+    const oldTourDestinations = await withTenantDb((tx) =>
+      tx
+        .select({ destination_id: tourDestinations.destination_id })
+        .from(tourDestinations)
+        .where(eq(tourDestinations.tour_id, id))
+    );
 
     const oldDestinationIds = oldTourDestinations.map(
       (td) => td.destination_id
     );
 
-    // Use transaction to ensure atomicity
-    const updated = await db.transaction(async (tx) => {
+    // Use transaction to ensure atomicity. withTenantDb IS that transaction —
+    // it opens one and sets app.tenant_id inside it — so this is the same
+    // atomicity it always had, now tenant-scoped.
+    const updated = await withTenantDb(async (tx) => {
       // Update the tour
       let [updatedTour] = await tx
         .update(tours)
@@ -543,6 +564,7 @@ export const updateTour = async (id, data) => {
         if (newDestinationIds.length > 0) {
           const tourDestinationValues = newDestinationIds.map(
             (destId, index) => ({
+              tenant_id: currentTenantId(),
               tour_id: id,
               destination_id: destId,
               order: index,
@@ -604,14 +626,16 @@ export const updateTour = async (id, data) => {
 export const deleteTour = async (id) => {
   try {
     // ✅ UPDATED: Check for active bookings (pending, confirmed, completed)
-    const activeBookings = await db.query.bookings.findFirst({
-      where: (bookings, { eq, and, inArray }) =>
-        and(
-          eq(bookings.tour_id, id),
-          inArray(bookings.status, ['pending', 'confirmed', 'completed'])
-        ),
-      columns: { id: true },
-    });
+    const activeBookings = await withTenantDb((tx) =>
+      tx.query.bookings.findFirst({
+        where: (bookings, { eq, and, inArray }) =>
+          and(
+            eq(bookings.tour_id, id),
+            inArray(bookings.status, ['pending', 'confirmed', 'completed'])
+          ),
+        columns: { id: true },
+      })
+    );
 
     if (activeBookings) {
       throw new Error(
@@ -620,14 +644,16 @@ export const deleteTour = async (id) => {
     }
 
     // ✅ Fetch tour with destinations
-    const tour = await db.query.tours.findFirst({
-      where: eq(tours.id, id),
-      with: {
-        tourDestinations: {
-          columns: { destination_id: true },
+    const tour = await withTenantDb((tx) =>
+      tx.query.tours.findFirst({
+        where: eq(tours.id, id),
+        with: {
+          tourDestinations: {
+            columns: { destination_id: true },
+          },
         },
-      },
-    });
+      })
+    );
 
     if (!tour) {
       throw new Error('Tour not found');
@@ -637,7 +663,7 @@ export const deleteTour = async (id) => {
     const destinationIds = tour.tourDestinations.map((td) => td.destination_id);
 
     // Delete tour (cascade will handle tour_destinations due to onDelete: 'cascade')
-    await db.delete(tours).where(eq(tours.id, id));
+    await withTenantDb((tx) => tx.delete(tours).where(eq(tours.id, id)));
 
     // ✅ UPDATED: Invalidate caches (FIXED: tourSlug instead of tourBySlug)
     await cache.del(CacheKeys.tourFull(tour.id));
@@ -686,21 +712,23 @@ export const searchTours = async (searchTerm) => {
 
     return await cache.wrap(cacheKey, 900, () => {
       return withRetry(async () => {
-        const results = await db
-          .select()
-          .from(tours)
-          .where(
-            and(
-              eq(tours.status, 'published'),
-              or(
-                like(tours.title, `%${searchTerm}%`),
-                like(tours.overview, `%${searchTerm}%`),
-                sql`${tours.tags}::text ILIKE ${`%${searchTerm}%`}`
+        const results = await withTenantDb((tx) =>
+          tx
+            .select()
+            .from(tours)
+            .where(
+              and(
+                eq(tours.status, 'published'),
+                or(
+                  like(tours.title, `%${searchTerm}%`),
+                  like(tours.overview, `%${searchTerm}%`),
+                  sql`${tours.tags}::text ILIKE ${`%${searchTerm}%`}`
+                )
               )
             )
-          )
-          .orderBy(desc(tours.featured), desc(tours.created_at))
-          .limit(50);
+            .orderBy(desc(tours.featured), desc(tours.created_at))
+            .limit(50)
+        );
 
         return results.map(formatTourResponse);
       });
@@ -720,12 +748,14 @@ export const getFeaturedTours = async (limit = 6) => {
 
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const results = await db
-          .select()
-          .from(tours)
-          .where(and(eq(tours.featured, true), eq(tours.status, 'published')))
-          .orderBy(desc(tours.created_at))
-          .limit(limit);
+        const results = await withTenantDb((tx) =>
+          tx
+            .select()
+            .from(tours)
+            .where(and(eq(tours.featured, true), eq(tours.status, 'published')))
+            .orderBy(desc(tours.created_at))
+            .limit(limit)
+        );
 
         return results.map(formatTourResponse);
       });
@@ -745,25 +775,27 @@ export const getDeals = async (limit = 10) => {
 
     return await cache.wrap(cacheKey, 1800, () => {
       return withRetry(async () => {
-        const results = await db
-          .select({
-            tour: tours,
-            live_discount_percentage: liveDiscountPercent,
-          })
-          .from(tours)
-          .where(
-            and(
-              eq(tours.is_deal, true),
-              eq(tours.status, 'published'),
-              // Eligibility from LIVE offers only, computed fresh — the stored
-              // discount_percentage would keep expired promos in the carousel
-              or(hasLiveSeasonalOffer, hasLiveFlatOffer)
+        const results = await withTenantDb((tx) =>
+          tx
+            .select({
+              tour: tours,
+              live_discount_percentage: liveDiscountPercent,
+            })
+            .from(tours)
+            .where(
+              and(
+                eq(tours.is_deal, true),
+                eq(tours.status, 'published'),
+                // Eligibility from LIVE offers only, computed fresh — the stored
+                // discount_percentage would keep expired promos in the carousel
+                or(hasLiveSeasonalOffer, hasLiveFlatOffer)
+              )
             )
-          )
-          // Rank on the still-bookable saving too, so a tour with an expired
-          // 50% and a live 10% doesn't outrank a genuine live 30%
-          .orderBy(desc(liveDiscountPercent), desc(tours.created_at))
-          .limit(limit);
+            // Rank on the still-bookable saving too, so a tour with an expired
+            // 50% and a live 10% doesn't outrank a genuine live 30%
+            .orderBy(desc(liveDiscountPercent), desc(tours.created_at))
+            .limit(limit)
+        );
 
         if (results.length === 0) return [];
 
@@ -773,11 +805,13 @@ export const getDeals = async (limit = 10) => {
         // survive. Cheap either way — this is capped at `limit` rows and the
         // whole function is cached.
         const tourIds = results.map((row) => row.tour.id);
-        const links = await db.query.tourDestinations.findMany({
-          where: inArray(tourDestinations.tour_id, tourIds),
-          with: { destination: true },
-          orderBy: asc(tourDestinations.order),
-        });
+        const links = await withTenantDb((tx) =>
+          tx.query.tourDestinations.findMany({
+            where: inArray(tourDestinations.tour_id, tourIds),
+            with: { destination: true },
+            orderBy: asc(tourDestinations.order),
+          })
+        );
 
         const destinationsByTour = new Map();
         for (const link of links) {
@@ -813,18 +847,20 @@ export const getTourStats = async (tourId) => {
 
     return await cache.wrap(cacheKey, 300, () => {
       return withRetry(async () => {
-        const tour = await db.query.tours.findFirst({
-          where: eq(tours.id, tourId),
-          with: {
-            bookings: {
-              columns: {
-                id: true,
-                status: true,
-                total_price: true,
+        const tour = await withTenantDb((tx) =>
+          tx.query.tours.findFirst({
+            where: eq(tours.id, tourId),
+            with: {
+              bookings: {
+                columns: {
+                  id: true,
+                  status: true,
+                  total_price: true,
+                },
               },
             },
-          },
-        });
+          })
+        );
 
         if (!tour) {
           throw new Error('Tour not found');
@@ -892,15 +928,17 @@ export const getToursWithDestinations = async (filters = {}) => {
 
         // Filter by destination using junction table
         if (normalizedFilters.destination_id) {
-          const toursWithDestination = db
-            .select({ tour_id: tourDestinations.tour_id })
-            .from(tourDestinations)
-            .where(
-              eq(
-                tourDestinations.destination_id,
-                normalizedFilters.destination_id
+          const toursWithDestination = withTenantDb((tx) =>
+            tx
+              .select({ tour_id: tourDestinations.tour_id })
+              .from(tourDestinations)
+              .where(
+                eq(
+                  tourDestinations.destination_id,
+                  normalizedFilters.destination_id
+                )
               )
-            );
+          );
 
           conditions.push(inArray(tours.id, toursWithDestination));
         }
@@ -1010,20 +1048,22 @@ export const getToursWithDestinations = async (filters = {}) => {
         }
 
         // ✅ Use query API to include destinations
-        const results = await db.query.tours.findMany({
-          where: whereClause,
-          orderBy: orderByClause,
-          limit: normalizedFilters.limit || 100,
-          offset: normalizedFilters.offset || 0,
-          with: {
-            tourDestinations: {
-              with: {
-                destination: true,
+        const results = await withTenantDb((tx) =>
+          tx.query.tours.findMany({
+            where: whereClause,
+            orderBy: orderByClause,
+            limit: normalizedFilters.limit || 100,
+            offset: normalizedFilters.offset || 0,
+            with: {
+              tourDestinations: {
+                with: {
+                  destination: true,
+                },
+                orderBy: asc(tourDestinations.order),
               },
-              orderBy: asc(tourDestinations.order),
             },
-          },
-        });
+          })
+        );
 
         // ✅ Format response with destinations
         return results.map((tour) => {
@@ -1051,17 +1091,19 @@ export const getTourByIdWithDestinations = async (id) => {
     const cacheKey = CacheKeys.tour(id);
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const tour = await db.query.tours.findFirst({
-          where: eq(tours.id, id),
-          with: {
-            tourDestinations: {
-              with: {
-                destination: true,
+        const tour = await withTenantDb((tx) =>
+          tx.query.tours.findFirst({
+            where: eq(tours.id, id),
+            with: {
+              tourDestinations: {
+                with: {
+                  destination: true,
+                },
+                orderBy: asc(tourDestinations.order),
               },
-              orderBy: asc(tourDestinations.order),
             },
-          },
-        });
+          })
+        );
 
         if (!tour) {
           return null;
@@ -1090,17 +1132,19 @@ export const getTourBySlugWithDestinations = async (slug) => {
     const cacheKey = CacheKeys.tourSlug(slug);
     return await cache.wrap(cacheKey, 3600, () => {
       return withRetry(async () => {
-        const tour = await db.query.tours.findFirst({
-          where: eq(tours.slug, slug),
-          with: {
-            tourDestinations: {
-              with: {
-                destination: true,
+        const tour = await withTenantDb((tx) =>
+          tx.query.tours.findFirst({
+            where: eq(tours.slug, slug),
+            with: {
+              tourDestinations: {
+                with: {
+                  destination: true,
+                },
+                orderBy: asc(tourDestinations.order),
               },
-              orderBy: asc(tourDestinations.order),
             },
-          },
-        });
+          })
+        );
 
         if (!tour) {
           return null;
@@ -1200,7 +1244,8 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
       return withRetry(async () => {
         const result =
           metric === 'revenue'
-            ? await db.execute(sql`
+            ? await withTenantDb((tx) =>
+                tx.execute(sql`
         SELECT 
           t.id,
           t.title as name,
@@ -1215,7 +1260,9 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
         ORDER BY value DESC
         LIMIT 5;
       `)
-            : await db.execute(sql`
+              )
+            : await withTenantDb((tx) =>
+                tx.execute(sql`
         SELECT 
           t.id,
           t.title as name,
@@ -1226,7 +1273,8 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
         GROUP BY t.id, t.title
         ORDER BY value DESC
         LIMIT 5;
-      `);
+      `)
+              );
         const tours = result.map((row) => ({
           id: row.id,
           name: row.name,

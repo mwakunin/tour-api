@@ -4,7 +4,7 @@ import {
   paystackConfig,
   requirePaystackConfig,
 } from '#config/paystack.config.js';
-import { db } from '#config/database.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { payments } from '#models/payment.model.js';
 import { bookings } from '#models/booking.model.js';
 import { eq } from 'drizzle-orm';
@@ -12,6 +12,7 @@ import logger from '#config/logger.js';
 import { emailService } from './email.service.js';
 import { cache } from '#utils/cache.js';
 import { CacheKeys } from '#utils/cacheKeys.js';
+import { recordBookingSettlement } from './bookingLedger.service.js';
 
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
 
@@ -32,17 +33,20 @@ export const initializePaystackPayment = async ({
     const reference = `FA-${bookingId}-${Date.now()}`;
 
     // Create payment record
-    const [payment] = await db
-      .insert(payments)
-      .values({
-        booking_id: bookingId,
-        amount: amount.toString(),
-        currency,
-        payment_method: 'paystack',
-        paystack_reference: reference,
-        status: 'pending',
-      })
-      .returning();
+    const [payment] = await withTenantDb((tx) =>
+      tx
+        .insert(payments)
+        .values({
+          tenant_id: currentTenantId(),
+          booking_id: bookingId,
+          amount: amount.toString(),
+          currency,
+          payment_method: 'paystack',
+          paystack_reference: reference,
+          status: 'pending',
+        })
+        .returning()
+    );
 
     // ✅ Construct callback URL
     const callbackUrl = process.env.FRONTEND_URL
@@ -87,14 +91,16 @@ export const initializePaystackPayment = async ({
     } = response.data.data;
 
     // Update payment with Paystack response
-    await db
-      .update(payments)
-      .set({
-        paystack_access_code: access_code,
-        paystack_authorization_url: authorization_url,
-        response_data: JSON.stringify(response.data),
-      })
-      .where(eq(payments.id, payment.id));
+    await withTenantDb((tx) =>
+      tx
+        .update(payments)
+        .set({
+          paystack_access_code: access_code,
+          paystack_authorization_url: authorization_url,
+          response_data: JSON.stringify(response.data),
+        })
+        .where(eq(payments.id, payment.id))
+    );
 
     logger.info('Paystack payment initialized:', {
       bookingId,
@@ -137,11 +143,13 @@ export const verifyPaystackPayment = async (reference) => {
 
     // Find payment by reference first — no need to call Paystack at all
     // if we've already settled this one.
-    const [payment] = await db
-      .select()
-      .from(payments)
-      .where(eq(payments.paystack_reference, reference))
-      .limit(1);
+    const [payment] = await withTenantDb((tx) =>
+      tx
+        .select()
+        .from(payments)
+        .where(eq(payments.paystack_reference, reference))
+        .limit(1)
+    );
 
     if (!payment) {
       throw new Error('Payment not found');
@@ -186,34 +194,44 @@ export const verifyPaystackPayment = async (reference) => {
       }
 
       // Update payment as completed
-      await db
-        .update(payments)
-        .set({
-          status: 'completed',
-          completed_at: new Date(),
-          response_data: JSON.stringify(response.data),
-        })
-        .where(eq(payments.id, payment.id));
+      const [completedPayment] = await withTenantDb((tx) =>
+        tx
+          .update(payments)
+          .set({
+            status: 'completed',
+            completed_at: new Date(),
+            response_data: JSON.stringify(response.data),
+          })
+          .where(eq(payments.id, payment.id))
+          .returning()
+      );
+
+      // Money has moved: record it and spend it against the receivable.
+      await recordBookingSettlement({ payment: completedPayment ?? payment });
 
       // Update booking
-      await db
-        .update(bookings)
-        .set({
-          payment_status: 'paid',
-          payment_method: 'paystack',
-          payment_id: reference,
-          status: 'confirmed',
-          updated_at: new Date(),
-        })
-        .where(eq(bookings.id, payment.booking_id));
+      await withTenantDb((tx) =>
+        tx
+          .update(bookings)
+          .set({
+            payment_status: 'paid',
+            payment_method: 'paystack',
+            payment_id: reference,
+            status: 'confirmed',
+            updated_at: new Date(),
+          })
+          .where(eq(bookings.id, payment.booking_id))
+      );
 
       // ✅ Get complete booking with tour details for email
-      const booking = await db.query.bookings.findFirst({
-        where: eq(bookings.id, payment.booking_id),
-        with: {
-          tour: true,
-        },
-      });
+      const booking = await withTenantDb((tx) =>
+        tx.query.bookings.findFirst({
+          where: eq(bookings.id, payment.booking_id),
+          with: {
+            tour: true,
+          },
+        })
+      );
 
       // ✅ Send payment confirmation email with invoice
       if (booking) {
@@ -263,13 +281,15 @@ export const verifyPaystackPayment = async (reference) => {
       };
     } else {
       // Payment failed
-      await db
-        .update(payments)
-        .set({
-          status: 'failed',
-          response_data: JSON.stringify(response.data),
-        })
-        .where(eq(payments.id, payment.id));
+      await withTenantDb((tx) =>
+        tx
+          .update(payments)
+          .set({
+            status: 'failed',
+            response_data: JSON.stringify(response.data),
+          })
+          .where(eq(payments.id, payment.id))
+      );
 
       logger.error('Payment failed:', { reference, status: data.status });
 
