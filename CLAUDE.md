@@ -1,6 +1,10 @@
-# Footloose Adventures API — Project Context
+# TourOps API — Project Context
 
-Backend API for Footloose Adventures, forked from the Bold Africa Adventures codebase and rebranded. This file gives Claude Code the context it needs to work effectively in this repo without re-discovering things each session.
+**This is a fork of the live Footloose Adventures backend, being built into a multi-tenant tour-operations product.** The live site (`footloose/api`, GitHub `mwakunin/footloose-backend`) stays untouched and in production; this fork is where the money layer (suppliers, payables, payment schedules, agent commissions, FX, ledger) and tenancy get built. Footloose will later migrate onto this as tenant #1.
+
+`upstream` points at the original footloose-backend repo so bugfixes shipped to live can be cherry-picked across. There is deliberately **no `origin`** yet — add one when you create the new repo, and never push this branch to footloose-backend.
+
+This file gives Claude Code the context it needs to work effectively in this repo without re-discovering things each session.
 
 ## Stack
 
@@ -40,18 +44,20 @@ NODE_ENV=test NODE_OPTIONS='--experimental-vm-modules' jest --runInBand --detect
 
 ## Local infrastructure
 
-Docker Compose project name is explicitly set to `footloose-api` (via the top-level `name:` key in `docker-compose.yml`). **Do not remove that key** — without it, Compose falls back to the parent directory name for volume/network naming, which caused this project's Postgres/Redis volumes to silently collide with a sibling Bold Africa checkout that also lived in a folder named `api`. Every sibling project's compose file should have its own explicit `name:` for the same reason.
+Docker Compose project name is explicitly set to `tourops-api` (via the top-level `name:` key in `docker-compose.yml`). **Do not remove that key** — without it, Compose falls back to the parent directory name for volume/network naming, which caused this project's Postgres/Redis volumes to silently collide with a sibling checkout that also lived in a folder named `api`. This fork is exactly that hazard: it is a second `api` folder alongside `footloose/api`, so its compose name, container names, host ports and DB names were all deliberately changed. Every sibling project's compose file should have its own explicit `name:` for the same reason.
 
 ```bash
 docker compose up -d postgres redis   # infra only, no API container
 docker compose up -d                  # full stack including api
 ```
 
-Databases: `footloose_dev` and `footloose_test`, same Postgres container, different DB names. `.env` points at `footloose_dev`, `.env.test` points at `footloose_test`.
+Databases: `tourops_dev` and `tourops_test`, same Postgres container, different DB names. `.env` points at `tourops_dev`, `.env.test` points at `tourops_test`.
 
-**Known env-loading gotcha:** `src/__tests__/setup.js` must load `.env.test` with `dotenv.config({ path: '.env.test', override: true })` — the `override: true` is required. Without it, if anything upstream already called `import 'dotenv/config'` (which loads plain `.env`), dotenv's default behavior is to *not* overwrite already-set variables, so `DATABASE_URL` silently stays pointed at `footloose_dev` even when `NODE_ENV=test`. This exact bug caused test runs to pollute the dev database for a while — always verify with a before/after row count check if touching this file:
+**Host ports are shifted off footloose's** so both stacks can run at once: API `3100` (was 3000), Postgres `5433` (was 5432), Redis `6380` (was 6379). Inside the Docker network the services still use 3000/5432/6379 — only the host-side mappings and the non-Docker `DATABASE_URL`/`REDIS_URL` changed.
+
+**Known env-loading gotcha:** `src/__tests__/setup.js` must load `.env.test` with `dotenv.config({ path: '.env.test', override: true })` — the `override: true` is required. Without it, if anything upstream already called `import 'dotenv/config'` (which loads plain `.env`), dotenv's default behavior is to *not* overwrite already-set variables, so `DATABASE_URL` silently stays pointed at `tourops_dev` even when `NODE_ENV=test`. This exact bug caused test runs to pollute the dev database for a while — always verify with a before/after row count check if touching this file:
 ```bash
-docker exec footloose-postgres psql -U postgres -d footloose_test -c "SELECT count(*) FROM \"user\";"
+docker exec tourops-postgres psql -U postgres -d tourops_test -c "SELECT count(*) FROM \"user\";"
 ```
 
 ## Known gotchas / patterns to watch for
@@ -108,7 +114,7 @@ Arcjet, Sentry, Resend, and whatever payment provider keys are live all need the
 
 ## Branding
 
-Rebranding from "Bold Africa Adventures" is in progress. If you find any remaining references to "Bold Africa," "boldafrica," or `bold_africa` (case-insensitive) in code, config, docs, or CI workflows, they should be updated to Footloose Adventures branding. Check beyond `src/` — also scan `.github/workflows/`, `docker-compose*.yml`, `*.md` docs, and log files.
+Hardcoded branding is a **bug** in this repo, not a rebranding task. Footloose and Bold Africa are both destined to be tenants, so any operator name, logo, email, booking-reference prefix (`BOOKING_REF_PREFIX`), or copy baked into code or config needs to become tenant-scoped configuration rather than being renamed. When you find a hardcoded "Footloose", "Bold Africa", "boldafrica", or `bold_africa` reference, the fix is to read it from tenant settings — not to swap in a different brand string.
 
 ```bash
 grep -rli "boldafrica\|bold africa\|bold_africa" . --exclude-dir=node_modules --exclude-dir=.git

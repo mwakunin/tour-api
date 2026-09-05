@@ -1,1 +1,1 @@
-CREATE DATABASE footloose_test;
+CREATE DATABASE tourops_test;

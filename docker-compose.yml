@@ -1,15 +1,15 @@
-name: footloose-api
+name: tourops-api
 
 services:
   api:
-    image: footloose-api:dev
+    image: tourops-api:dev
     build:
       context: .
       target: development
       network: host
-    container_name: footloose-api-dev
+    container_name: tourops-api-dev
     ports:
-      - '3000:3000'
+      - '3100:3000'
     environment:
       - NODE_ENV=development
       - PORT=3000
@@ -25,18 +25,18 @@ services:
       postgres:
         condition: service_healthy # 👈 wait for postgres too
     networks:
-      - footloose-network
+      - tourops-network
     restart: unless-stopped
 
   postgres:
     image: postgres:16-alpine
-    container_name: footloose-postgres
+    container_name: tourops-postgres
     ports:
-      - '5432:5432'
+      - '5433:5432'
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: footloose_dev
+      POSTGRES_DB: tourops_dev
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init.sql
@@ -46,14 +46,14 @@ services:
       timeout: 3s
       retries: 3
     networks:
-      - footloose-network
+      - tourops-network
     restart: unless-stopped
 
   redis:
     image: redis:7-alpine
-    container_name: footloose-redis
+    container_name: tourops-redis
     ports:
-      - '6379:6379'
+      - '6380:6379'
     volumes:
       - redis-data:/data
     healthcheck:
@@ -62,11 +62,11 @@ services:
       timeout: 3s
       retries: 3
     networks:
-      - footloose-network
+      - tourops-network
     restart: unless-stopped
 
 networks:
-  footloose-network:
+  tourops-network:
     driver: bridge
 
 volumes:
