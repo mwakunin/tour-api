@@ -60,6 +60,60 @@ Databases: `tourops_dev` and `tourops_test`, same Postgres container, different 
 docker exec tourops-postgres psql -U postgres -d tourops_test -c "SELECT count(*) FROM \"user\";"
 ```
 
+## Multi-tenancy
+
+Shared schema, shared database, `tenant_id` discriminator — the same shape as
+school-saas, ported conceptually (that project is TypeScript/Hono, this is
+JavaScript/Express, so nothing copies verbatim).
+
+**The data model is tenant-aware; the tenancy product is not built.** There is
+no signup, no subdomain routing, no billing, no tenant switcher, and nothing
+user-facing says the word "tenant". Footloose runs as a single seeded row,
+`00000000-0000-0000-0000-000000000001`. The column exists now because
+retrofitting a discriminator across every table and query later is the
+expensive migration; the product surface can wait for operator #2.
+
+**`user`, `session`, `account` and `verification` are deliberately global.**
+They are Better Auth's tables, and a person may legitimately work for two
+operators. Roles will come from a memberships table, not `user.role`.
+
+**Composite foreign keys.** Child rows reference `(tenant_id, id)`, never
+`(id)` alone. Postgres validates a foreign key internally, so a single-column
+reference would happily let one tenant's booking point at another tenant's
+tour. Any new table referencing another tenant-scoped table must do the same.
+
+**Slugs and references are unique per tenant, not globally.** `tours.slug`,
+`destinations.slug`, `blog_categories.slug`, `blog_posts.slug` and
+`bookings.booking_reference` are `UNIQUE (tenant_id, <col>)`. Two operators
+both selling a "7-day-mara-safari" is normal. The exception is
+`files.file_id`, which stays globally unique because it is an ImageKit id
+issued by an external system and is not ours to scope.
+
+**`tenant_id` has a DEFAULT, and that is a temporary crutch.** Migration 0007
+defaults it to the seed tenant so the existing handlers and the whole test
+suite keep working without being rewritten in the same change. It means a
+handler that forgets `tenant_id` silently writes to the seed tenant — exactly
+the failure RLS exists to prevent. **Drop the default in the same change that
+adds the `withTenant` middleware and RLS policies.**
+
+**RLS is not enabled yet, on purpose.** Policies cannot land before a
+middleware sets `app.tenant_id` per request via transaction-scoped
+`set_config(..., true)`, because with no tenant set every policy-protected
+query returns zero rows. They ship together, along with a non-owner runtime
+role — `FORCE ROW LEVEL SECURITY` still exempts the table owner. Mirror
+school-saas's `db/roles.sql`.
+
+**One deliberate schema/snapshot divergence.** `blog_posts_category_tenant_fk`
+is written by hand in migration 0007 as `ON DELETE SET NULL (category_id)` —
+the column-scoped form Postgres 15+ supports. A plain `ON DELETE SET NULL` is
+*accepted* at definition time but fails at DELETE time, because it would try
+to null `tenant_id`, which is `NOT NULL`; the bug would only surface the first
+time somebody deleted a blog category in production. Drizzle cannot express the
+column list, so its snapshot records a plain `set null`. Do not "fix" this by
+regenerating the statement.
+
+---
+
 ## Known gotchas / patterns to watch for
 
 **1. Temporal Dead Zone (TDZ) variable shadowing.** A recurring bug pattern found multiple times in this codebase: destructuring a query result into a variable with the same name as an imported Drizzle table, then referencing the table in the same statement before the local variable is assigned:

@@ -7,6 +7,8 @@ import {
   decimal,
   timestamp,
   index,
+  unique,
+  foreignKey,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { tours } from './tour.model.js';
@@ -16,24 +18,30 @@ import {
   paymentStatusEnum,
   bookingStatusEnum,
 } from './enums.model.js';
+import { tenants } from './tenant.model.js';
 
 // ============= BOOKINGS TABLE =============
 export const bookings = pgTable(
   'bookings',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Tenant discriminator. Added before there is a second operator on
+    // purpose — retrofitting this across every table and query later is the
+    // expensive migration, and the column costs nothing while there is one row.
+    tenant_id: uuid('tenant_id')
+      .references(() => tenants.id, { onDelete: 'restrict' })
+      .notNull(),
 
     // Unique booking reference (e.g., FA-2024-001234)
-    booking_reference: varchar('booking_reference', { length: 20 })
-      .notNull()
-      .unique(),
+    booking_reference: varchar('booking_reference', { length: 20 }).notNull(),
 
     // Foreign keys
     tour_id: uuid('tour_id')
       .references(() => tours.id, { onDelete: 'cascade' })
       .notNull(),
-    user_id: text('user_id')
-      .references(() => user.id, { onDelete: 'set null' }),
+    user_id: text('user_id').references(() => user.id, {
+      onDelete: 'set null',
+    }),
 
     // Booking details
     group_size: integer('group_size').notNull(),
@@ -94,6 +102,23 @@ export const bookings = pgTable(
     ),
     startDateIdx: index('bookings_start_date_idx').on(table.start_date),
     createdAtIdx: index('bookings_created_at_idx').on(table.created_at),
+    tenantIdIdx: index('bookings_tenant_id_idx').on(table.tenant_id),
+    tenantScopedId: unique('bookings_tenant_id_id_key').on(
+      table.tenant_id,
+      table.id
+    ),
+    // Booking references are generated per operator from their own prefix, so
+    // uniqueness is per tenant. Globally unique would mean one operator's
+    // counter could collide with another's.
+    tenantReferenceUnique: unique('bookings_tenant_id_reference_key').on(
+      table.tenant_id,
+      table.booking_reference
+    ),
+    tourFk: foreignKey({
+      name: 'bookings_tour_tenant_fk',
+      columns: [table.tenant_id, table.tour_id],
+      foreignColumns: [tours.tenant_id, tours.id],
+    }).onDelete('cascade'),
   })
 );
 
@@ -115,7 +140,6 @@ export const bookingsRelations = relations(bookings, ({ one }) => ({
  * Format: FA-YYYY-NNNNNN
  * Example: FA-2024-001234
  */
-
 
 export const generateBookingReferenceSimple = () => {
   const prefix = process.env.BOOKING_REF_PREFIX || 'FA';

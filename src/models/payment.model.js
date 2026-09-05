@@ -6,11 +6,14 @@ import {
   timestamp,
   index,
   pgEnum,
+  unique,
+  foreignKey,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { bookings } from './booking.model.js';
 import { user } from './user.model.js';
 import { currencyEnum, paymentTransactionStatusEnum } from './enums.model.js';
+import { tenants } from './tenant.model.js';
 
 export const paymentMethodEnum = pgEnum('payment_method', [
   'mpesa',
@@ -25,6 +28,12 @@ export const payments = pgTable(
   'payments',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Tenant discriminator. Added before there is a second operator on
+    // purpose — retrofitting this across every table and query later is the
+    // expensive migration, and the column costs nothing while there is one row.
+    tenant_id: uuid('tenant_id')
+      .references(() => tenants.id, { onDelete: 'restrict' })
+      .notNull(),
 
     booking_id: uuid('booking_id')
       .references(() => bookings.id, { onDelete: 'cascade' })
@@ -76,6 +85,18 @@ export const payments = pgTable(
     pesapalMerchantRefIdx: index('payments_pesapal_merchant_ref_idx').on(
       table.pesapal_merchant_reference
     ),
+    tenantIdIdx: index('payments_tenant_id_idx').on(table.tenant_id),
+    // Target for settlements.payment_id, which was the one money-layer
+    // reference that could not be tenant-scoped until now.
+    tenantScopedId: unique('payments_tenant_id_id_key').on(
+      table.tenant_id,
+      table.id
+    ),
+    bookingFk: foreignKey({
+      name: 'payments_booking_tenant_fk',
+      columns: [table.tenant_id, table.booking_id],
+      foreignColumns: [bookings.tenant_id, bookings.id],
+    }).onDelete('cascade'),
   })
 );
 

@@ -225,10 +225,9 @@ export const settlements = pgTable(
     // looking money up by whatever reference the bank or telco printed.
     external_reference: text('external_reference'),
 
-    // Set for inbound settlements that came through the checkout.
-    payment_id: uuid('payment_id').references(() => payments.id, {
-      onDelete: 'set null',
-    }),
+    // Set for inbound settlements that came through the checkout. Scoped by
+    // the composite key below, not a bare reference — see the note at the top.
+    payment_id: uuid('payment_id'),
 
     status: settlementStatusEnum('status').default('pending').notNull(),
     occurred_at: timestamp('occurred_at', { withTimezone: true }),
@@ -267,6 +266,11 @@ export const settlements = pgTable(
       columns: [table.tenant_id, table.counterparty_id],
       foreignColumns: [counterparties.tenant_id, counterparties.id],
     }).onDelete('restrict'),
+    paymentFk: foreignKey({
+      name: 'settlements_payment_tenant_fk',
+      columns: [table.tenant_id, table.payment_id],
+      foreignColumns: [payments.tenant_id, payments.id],
+    }).onDelete('set null'),
     amountPositiveCk: check(
       'settlements_amount_cents_positive',
       sql`${table.amount_cents} > 0`

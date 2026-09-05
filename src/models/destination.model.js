@@ -7,19 +7,27 @@ import {
   integer,
   timestamp,
   index,
+  unique,
 } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { tourDestinations } from './tour.model.js';
+import { tenants } from './tenant.model.js';
 
 // ============= DESTINATIONS TABLE =============
 export const destinations = pgTable(
   'destinations',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Tenant discriminator. Added before there is a second operator on
+    // purpose — retrofitting this across every table and query later is the
+    // expensive migration, and the column costs nothing while there is one row.
+    tenant_id: uuid('tenant_id')
+      .references(() => tenants.id, { onDelete: 'restrict' })
+      .notNull(),
 
     // Core fields
     title: text('title').notNull(),
-    slug: varchar('slug', { length: 250 }).notNull().unique(),
+    slug: varchar('slug', { length: 250 }).notNull(),
     description: text('description').notNull(),
 
     // Media
@@ -46,6 +54,15 @@ export const destinations = pgTable(
       .notNull(),
   },
   (table) => ({
+    tenantIdIdx: index('destinations_tenant_id_idx').on(table.tenant_id),
+    tenantScopedId: unique('destinations_tenant_id_id_key').on(
+      table.tenant_id,
+      table.id
+    ),
+    tenantSlugUnique: unique('destinations_tenant_id_slug_key').on(
+      table.tenant_id,
+      table.slug
+    ),
     // Indexes for better query performance
     slugIdx: index('destinations_slug_idx').on(table.slug),
     countryIdx: index('destinations_country_idx').on(table.country),

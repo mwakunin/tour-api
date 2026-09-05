@@ -10,6 +10,7 @@ import {
   jsonb,
   index,
   unique,
+  foreignKey,
 } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 
@@ -23,16 +24,23 @@ import {
   tourStatusEnum,
   durationUnitEnum,
 } from './enums.model.js';
+import { tenants } from './tenant.model.js';
 
 // ============= TOURS TABLE =============
 export const tours = pgTable(
   'tours',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Tenant discriminator. Added before there is a second operator on
+    // purpose — retrofitting this across every table and query later is the
+    // expensive migration, and the column costs nothing while there is one row.
+    tenant_id: uuid('tenant_id')
+      .references(() => tenants.id, { onDelete: 'restrict' })
+      .notNull(),
 
     // Basic info
     title: text('title').notNull(),
-    slug: varchar('slug', { length: 250 }).notNull().unique(),
+    slug: varchar('slug', { length: 250 }).notNull(),
     overview: text('overview').notNull(),
 
     // Itinerary
@@ -131,6 +139,18 @@ export const tours = pgTable(
   },
 
   (table) => ({
+    tenantIdIdx: index('tours_tenant_id_idx').on(table.tenant_id),
+    // Target for composite foreign keys from bookings and tour_destinations.
+    tenantScopedId: unique('tours_tenant_id_id_key').on(
+      table.tenant_id,
+      table.id
+    ),
+    // A slug is unique WITHIN an operator, not globally. Two operators both
+    // selling a "7-day-mara-safari" is normal; the old global unique forbade it.
+    tenantSlugUnique: unique('tours_tenant_id_slug_key').on(
+      table.tenant_id,
+      table.slug
+    ),
     slugIdx: index('tours_slug_idx').on(table.slug),
     statusIdx: index('tours_status_idx').on(table.status),
     featuredIdx: index('tours_featured_idx').on(table.featured),
@@ -149,6 +169,12 @@ export const tourDestinations = pgTable(
   'tour_destinations',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    // Tenant discriminator. Added before there is a second operator on
+    // purpose — retrofitting this across every table and query later is the
+    // expensive migration, and the column costs nothing while there is one row.
+    tenant_id: uuid('tenant_id')
+      .references(() => tenants.id, { onDelete: 'restrict' })
+      .notNull(),
     tour_id: uuid('tour_id')
       .references(() => tours.id, { onDelete: 'cascade' })
       .notNull(),
@@ -172,6 +198,17 @@ export const tourDestinations = pgTable(
     ),
     // Ensure unique tour-destination pairs
     uniqueTourDestination: unique().on(table.tour_id, table.destination_id),
+    tenantIdIdx: index('tour_destinations_tenant_id_idx').on(table.tenant_id),
+    tourFk: foreignKey({
+      name: 'tour_destinations_tour_tenant_fk',
+      columns: [table.tenant_id, table.tour_id],
+      foreignColumns: [tours.tenant_id, tours.id],
+    }).onDelete('cascade'),
+    destinationFk: foreignKey({
+      name: 'tour_destinations_destination_tenant_fk',
+      columns: [table.tenant_id, table.destination_id],
+      foreignColumns: [destinations.tenant_id, destinations.id],
+    }).onDelete('cascade'),
   })
 );
 

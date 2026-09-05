@@ -50,6 +50,13 @@
       "when": 1788612711679,
       "tag": "0006_milky_morgan_stark",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788614357147,
+      "tag": "0007_swift_wendigo",
+      "breakpoints": true
     }
   ]
 }
