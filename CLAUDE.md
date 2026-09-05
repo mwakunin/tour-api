@@ -53,7 +53,7 @@ docker compose up -d                  # full stack including api
 
 Databases: `tourops_dev` and `tourops_test`, same Postgres container, different DB names. `.env` points at `tourops_dev`, `.env.test` points at `tourops_test`.
 
-**Host ports are shifted off footloose's** so both stacks can run at once: API `3100` (was 3000), Postgres `5433` (was 5432), Redis `6380` (was 6379). Inside the Docker network the services still use 3000/5432/6379 — only the host-side mappings and the non-Docker `DATABASE_URL`/`REDIS_URL` changed.
+**Host ports are shifted off footloose's** so both stacks can run at once: API `3100` (was 3000), Postgres `5437`, Redis `6382`. Inside the Docker network the services still use 3000/5432/6379 — only the host-side mappings and the non-Docker `DATABASE_URL`/`REDIS_URL` changed.
 
 **Known env-loading gotcha:** `src/__tests__/setup.js` must load `.env.test` with `dotenv.config({ path: '.env.test', override: true })` — the `override: true` is required. Without it, if anything upstream already called `import 'dotenv/config'` (which loads plain `.env`), dotenv's default behavior is to *not* overwrite already-set variables, so `DATABASE_URL` silently stays pointed at `tourops_dev` even when `NODE_ENV=test`. This exact bug caused test runs to pollute the dev database for a while — always verify with a before/after row count check if touching this file:
 ```bash

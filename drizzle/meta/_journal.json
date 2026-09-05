@@ -43,6 +43,13 @@
       "when": 1786796248979,
       "tag": "0005_daily_shaman",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788612711679,
+      "tag": "0006_milky_morgan_stark",
+      "breakpoints": true
     }
   ]
 }
