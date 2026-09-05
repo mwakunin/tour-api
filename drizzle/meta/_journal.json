@@ -64,6 +64,13 @@
       "when": 1788615510398,
       "tag": "0008_rls_money_layer",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788616829932,
+      "tag": "0009_grant_legacy_tables_to_app_role",
+      "breakpoints": true
     }
   ]
 }

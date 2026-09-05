@@ -9,6 +9,7 @@ import * as Sentry from '@sentry/node';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerSpec } from './config/swagger.js';
 import { errorHandler } from './middleware/error.middleware.js';
+import { resolveTenant } from '#middleware/tenant.middleware.js';
 import { auth } from '#utils/auth.js';
 import authRoutes from '#routes/auth.routes.js';
 import destinationRoutes from '#routes/destination.routes.js';
@@ -86,6 +87,11 @@ app.get('/api', (req, res) => {
 app.use('/', healthRoutes); // Registers /health and /api/health
 
 // All other routes handle security individually
+
+// Every API route runs inside a tenant context. Mounted after health and auth
+// so an unauthenticated probe does not need a tenant, and before the routes so
+// that any withTenantDb call beneath them resolves.
+app.use('/api', resolveTenant);
 
 app.use('/api/users', usersRoutes);
 app.use('/api/test', adminTestRoutes);
