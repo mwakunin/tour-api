@@ -303,7 +303,9 @@ export const pesapalCallback = async (req, res) => {
       // Handle successful payment
       if (result.status === 'Completed') {
         return res.redirect(
-          `${process.env.FRONTEND_URL}/payment/success?reference=${OrderMerchantReference}&trackingId=${OrderTrackingId}`
+          `${process.env.FRONTEND_URL}/payment/success?reference=${encodeURIComponent(
+            OrderMerchantReference
+          )}&trackingId=${encodeURIComponent(OrderTrackingId)}`
         );
       }
 
@@ -316,7 +318,7 @@ export const pesapalCallback = async (req, res) => {
 
       // Handle pending/processing status
       return res.redirect(
-        `${process.env.FRONTEND_URL}/payment/pending?reference=${OrderMerchantReference}&trackingId=${OrderTrackingId}`
+        `${process.env.FRONTEND_URL}/payment/pending?reference=${encodeURIComponent(OrderMerchantReference)}&trackingId=${encodeURIComponent(OrderTrackingId)}`
       );
     } catch (verifyError) {
       logger.error('Error verifying Pesapal payment:', verifyError);

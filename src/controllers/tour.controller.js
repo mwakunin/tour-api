@@ -77,8 +77,15 @@ export const searchToursController = async (req, res, next) => {
 
 export const getFeaturedToursController = async (req, res, next) => {
   try {
-    const { limit = 6 } = req.query;
-    const { data, cached } = await getFeaturedTours(parseInt(limit));
+    // parseInt('abc') is NaN and reached the database; clamp instead.
+    const parsedLimit = Number.parseInt(req.query.limit ?? '6', 10);
+    if (Number.isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      return res.status(400).json({
+        success: false,
+        error: 'limit must be a number between 1 and 100',
+      });
+    }
+    const { data, cached } = await getFeaturedTours(parsedLimit);
 
     res.json({
       success: true,
@@ -227,6 +234,11 @@ export const getTourStatsController = async (req, res, next) => {
     });
   } catch (error) {
     logger.error('[Tour Controller] Get stats error:', error);
+    // Matches the not-found handling in the other tour handlers; without it a
+    // missing tour surfaced as a 500.
+    if (error.message === 'Tour not found') {
+      return res.status(404).json({ success: false, error: error.message });
+    }
     next(error);
   }
 };

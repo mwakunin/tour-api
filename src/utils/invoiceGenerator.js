@@ -89,7 +89,11 @@ export const generateInvoicePDF = (booking) => {
   doc.text('Status:', rightCol, yPos);
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(...primaryColor);
-  doc.text((booking.payment_status || 'pending').toUpperCase(), rightCol + 35, yPos);
+  doc.text(
+    (booking.payment_status || 'pending').toUpperCase(),
+    rightCol + 35,
+    yPos
+  );
   doc.setTextColor(...textColor);
   yPos += 10;
 
@@ -302,7 +306,7 @@ export const generateInvoicePDF = (booking) => {
     yPos += 5;
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(0, 128, 0);
-    doc.text('✓ PAID', 20, yPos);
+    doc.text('PAID', 20, yPos);
     doc.setTextColor(...textColor);
   } else {
     doc.setFont('helvetica', 'bold');

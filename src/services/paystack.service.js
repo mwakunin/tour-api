@@ -258,7 +258,6 @@ export const verifyPaystackPayment = async (reference) => {
           await emailService.sendPaymentConfirmation(booking);
           logger.info('Payment confirmation email sent:', {
             bookingId: booking.id,
-            email: booking.customer_email,
           });
         } catch (emailError) {
           logger.error(

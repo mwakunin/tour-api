@@ -156,10 +156,16 @@ export const paymentInitializeSchema = z
     booking_id: z.string().uuid('Invalid booking ID'),
     payment_method: paymentMethodEnum,
 
-    // M-Pesa specific
+    // M-Pesa specific. Accepts both shapes, matching mpesaInitiateSchema —
+    // the unified endpoint rejected 07XXXXXXXX while the M-Pesa-specific one
+    // accepted it, so the same number worked or failed depending on route.
+    // formatPhoneNumber normalises either before dispatch.
     phone_number: z
       .string()
-      .regex(/^254\d{9}$/)
+      .regex(
+        /^(254\d{9}|0\d{9})$/,
+        'Phone number must be 254XXXXXXXXX or 0XXXXXXXXX'
+      )
       .optional(),
 
     // Paystack specific

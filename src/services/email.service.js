@@ -4,7 +4,7 @@ import logger from '#config/logger.js';
 import { generateInvoicePDF } from '../utils/invoiceGenerator.js';
 import { withTenantDb } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
-import { and, gte, lte } from 'drizzle-orm';
+import { and, gte, lt } from 'drizzle-orm';
 
 const escapeHtml = (str) =>
   String(str ?? '')
@@ -47,10 +47,7 @@ class EmailService {
       if (!booking.customer_email) {
         logger.error(
           'Cannot send booking confirmation: customer_email is missing',
-          {
-            bookingId: booking.id,
-            booking: JSON.stringify(booking, null, 2),
-          }
+          { bookingId: booking.id }
         );
         throw new Error('Customer email is required');
       }
@@ -390,7 +387,7 @@ class EmailService {
                 ? `
               <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0;">
                 <p><strong>Tour of Interest:</strong> ${escapeHtml(inquiry.tour_title)}</p>
-                ${inquiry.tour_id ? `<p><strong>Tour ID:</strong> ${inquiry.tour_id}</p>` : ''}
+                ${inquiry.tour_id ? `<p><strong>Tour ID:</strong> ${escapeHtml(inquiry.tour_id)}</p>` : ''}
               </div>
             `
                 : ''
@@ -546,7 +543,7 @@ class EmailService {
         tx.query.bookings.findMany({
           where: and(
             gte(bookings.created_at, today),
-            lte(bookings.created_at, tomorrow)
+            lt(bookings.created_at, tomorrow)
           ),
           with: { tour: true },
         })

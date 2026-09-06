@@ -36,11 +36,27 @@ export const destinationCreateSchema = destinationSchema.omit({
 /**
  * Schema for updating a destination
  */
-export const destinationUpdateSchema = destinationSchema.partial().omit({
-  id: true,
-  created_at: true,
-  updated_at: true,
-});
+// The create schema defaults `featured` and `position`, and .partial() keeps
+// those defaults — so a PATCH that never mentioned either silently reset them
+// to the create-time values.
+//
+// Both are omitted and redeclared rather than unwrapped with removeDefault():
+// `position` is `.default(0).optional()`, so its outer wrapper is optional and
+// removeDefault does not exist on it. Declaring them plainly avoids depending
+// on the internal wrapper order at all.
+export const destinationUpdateSchema = destinationSchema
+  .omit({
+    id: true,
+    created_at: true,
+    updated_at: true,
+    featured: true,
+    position: true,
+  })
+  .partial()
+  .extend({
+    featured: z.boolean().optional(),
+    position: z.number().int().min(0).optional(),
+  });
 
 /**
  * Schema for querying destinations

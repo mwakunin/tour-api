@@ -289,10 +289,11 @@ export const deleteFile = async (req, res) => {
       });
     }
 
-    // Generic for unexpected failures: these messages come from ImageKit and
-    // the database and carry provider internals and query text. The
-    // allowlisted cases above (File not found and friends) are written for the
-    // client and still pass through. Full detail stays in the logs.
+    // 'File not found' is client-safe and meaningful; anything else is
+    // ImageKit or database internals and stays in the logs.
+    if (error.message === 'File not found') {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
     res.status(500).json({
       success: false,
       error: 'Upload operation failed',
@@ -405,10 +406,11 @@ export const getOptimizedImage = async (req, res) => {
     logger.error(`[${requestId}] Get optimized image error: ${error.message}`, {
       error: error.stack,
     });
-    // Generic for unexpected failures: these messages come from ImageKit and
-    // the database and carry provider internals and query text. The
-    // allowlisted cases above (File not found and friends) are written for the
-    // client and still pass through. Full detail stays in the logs.
+    // 'File not found' is client-safe and meaningful; anything else is
+    // ImageKit or database internals and stays in the logs.
+    if (error.message === 'File not found') {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
     res.status(500).json({
       success: false,
       error: 'Upload operation failed',
@@ -456,10 +458,11 @@ export const getResponsiveImages = async (req, res) => {
       `[${requestId}] Get responsive images error: ${error.message}`,
       { error: error.stack }
     );
-    // Generic for unexpected failures: these messages come from ImageKit and
-    // the database and carry provider internals and query text. The
-    // allowlisted cases above (File not found and friends) are written for the
-    // client and still pass through. Full detail stays in the logs.
+    // 'File not found' is client-safe and meaningful; anything else is
+    // ImageKit or database internals and stays in the logs.
+    if (error.message === 'File not found') {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
     res.status(500).json({
       success: false,
       error: 'Upload operation failed',
@@ -517,10 +520,11 @@ export const listFilesController = async (req, res) => {
     logger.error(`[${requestId}] List files error: ${error.message}`, {
       error: error.stack,
     });
-    // Generic for unexpected failures: these messages come from ImageKit and
-    // the database and carry provider internals and query text. The
-    // allowlisted cases above (File not found and friends) are written for the
-    // client and still pass through. Full detail stays in the logs.
+    // 'File not found' is client-safe and meaningful; anything else is
+    // ImageKit or database internals and stays in the logs.
+    if (error.message === 'File not found') {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
     res.status(500).json({
       success: false,
       error: 'Upload operation failed',
@@ -562,10 +566,11 @@ export const getFilesByFolderController = async (req, res) => {
     logger.error(`[${requestId}] Get files by folder error: ${error.message}`, {
       error: error.stack,
     });
-    // Generic for unexpected failures: these messages come from ImageKit and
-    // the database and carry provider internals and query text. The
-    // allowlisted cases above (File not found and friends) are written for the
-    // client and still pass through. Full detail stays in the logs.
+    // 'File not found' is client-safe and meaningful; anything else is
+    // ImageKit or database internals and stays in the logs.
+    if (error.message === 'File not found') {
+      return res.status(404).json({ success: false, error: 'File not found' });
+    }
     res.status(500).json({
       success: false,
       error: 'Upload operation failed',

@@ -25,7 +25,9 @@ export const bookingCreateSchema = z
       .positive('Price per person must be positive')
       .optional(),
     total_price: z.number().positive('Total price must be positive').optional(),
-    currency: z.string().length(3).default('KES'),
+    // Constrained to the currency enum the column actually accepts;
+    // any other three-letter code was a 400 deferred into a 500.
+    currency: z.enum(['USD', 'KES']).default('KES'),
 
     // Customer details
     customer_name: z.string().min(1, 'Customer name is required').max(200),
@@ -82,7 +84,7 @@ export const bookingUpdateFields = z.object({
   // Pricing
   price_per_person: z.number().positive().optional(),
   total_price: z.number().positive().optional(),
-  currency: z.string().length(3).optional(),
+  currency: z.enum(['USD', 'KES']).optional(),
   // Customer info
   customer_name: z.string().min(1).max(200).optional(),
   customer_email: emailSchema.optional(),
@@ -175,7 +177,7 @@ export const bookingQuerySchema = z.object({
   // Price filters
   min_price: z.coerce.number().positive().optional(),
   max_price: z.coerce.number().positive().optional(),
-  currency: z.string().length(3).optional(),
+  currency: z.enum(['USD', 'KES']).optional(),
 
   // Sorting
   sort_by: z

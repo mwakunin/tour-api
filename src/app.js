@@ -94,7 +94,12 @@ app.use('/', healthRoutes); // Registers /health and /api/health
 app.use('/api', resolveTenant);
 
 app.use('/api/users', usersRoutes);
-app.use('/api/test', adminTestRoutes);
+// Development only. These routes echo req.user.email and the caller's
+// permission set back to any authenticated user, and /moderator advertises a
+// role check it does not perform. They are scaffolding, not product.
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/test', adminTestRoutes);
+}
 app.use('/api/destinations', destinationRoutes);
 app.use('/api/tours', tourRoutes);
 app.use('/api/bookings', bookingRoutes);

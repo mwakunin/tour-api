@@ -17,10 +17,14 @@ const serializeFilters = (filters = {}) => {
     .map((key) => {
       const value = filters[key];
       // Handle different types
-      if (typeof value === 'object') {
-        return `${key}=${JSON.stringify(value)}`;
-      }
-      return `${key}=${value}`;
+      // Encoded, not raw: joining on | and = means a value containing either
+      // delimiter can produce the same key as a different filter set, and the
+      // two share a cache entry.
+      const encoded =
+        typeof value === 'object'
+          ? encodeURIComponent(JSON.stringify(value))
+          : encodeURIComponent(String(value));
+      return `${encodeURIComponent(key)}=${encoded}`;
     })
     .join('|');
 

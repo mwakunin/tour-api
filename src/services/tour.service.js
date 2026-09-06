@@ -8,7 +8,6 @@ import {
   sql,
   gte,
   lte,
-  like,
   ilike,
   inArray,
 } from 'drizzle-orm';
@@ -198,13 +197,9 @@ export const getTours = async (filters = {}) => {
       search: filters.search?.toLowerCase(),
     };
 
-    console.log('Backend received filters:', normalizedFilters);
-    console.log(
-      'Category value:',
-      normalizedFilters.category,
-      'Type:',
-      typeof normalizedFilters.category
-    );
+    logger.debug('[Tours] Listing with filters', {
+      filters: normalizedFilters,
+    });
     const cacheKey = CacheKeys.toursList(normalizedFilters); // ✅ Use normalizedFilters
 
     return await cache.wrap(cacheKey, 1800, () => {
@@ -720,8 +715,8 @@ export const searchTours = async (searchTerm) => {
               and(
                 eq(tours.status, 'published'),
                 or(
-                  like(tours.title, `%${searchTerm}%`),
-                  like(tours.overview, `%${searchTerm}%`),
+                  ilike(tours.title, `%${searchTerm}%`),
+                  ilike(tours.overview, `%${searchTerm}%`),
                   sql`${tours.tags}::text ILIKE ${`%${searchTerm}%`}`
                 )
               )

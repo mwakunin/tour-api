@@ -62,7 +62,11 @@ export const payments = pgTable(
     // ✅ NEW: Bank Transfer specific
     receipt_number: text('receipt_number'), // Bank receipt/reference number
     notes: text('notes'), // Admin notes about the payment
-    confirmed_by: text('confirmed_by').references(() => user.id),
+    // set null, not the default: deleting a staff account must not take the
+    // payment record with it. Who confirmed it is audit history.
+    confirmed_by: text('confirmed_by').references(() => user.id, {
+      onDelete: 'set null',
+    }),
 
     status: paymentTransactionStatusEnum('status').default('pending').notNull(),
     response_data: text('response_data'),
@@ -84,6 +88,11 @@ export const payments = pgTable(
     ),
     pesapalMerchantRefIdx: index('payments_pesapal_merchant_ref_idx').on(
       table.pesapal_merchant_reference
+    ),
+    // Every M-Pesa callback looks a payment up by this; it was a sequential
+    // scan on a table that only grows.
+    checkoutRequestIdx: index('payments_checkout_request_id_idx').on(
+      table.checkout_request_id
     ),
     tenantIdIdx: index('payments_tenant_id_idx').on(table.tenant_id),
     // Target for settlements.payment_id, which was the one money-layer
