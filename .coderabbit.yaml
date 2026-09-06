@@ -1,27 +1,34 @@
 # CodeRabbit configuration.
 #
-# The free plan reviews at most 100 files per PR. The full tree is 176, so
-# these filters cut it to 94 by dropping everything that is generated,
-# vendored, or infrastructure rather than application logic.
+# The free plan reviews at most 100 files per PR, and CodeRabbit reads this
+# file from the *feature branch under review* — so both open PRs share one
+# config. There is no per-PR override. This file is therefore tuned for
+# whichever review is currently in flight.
 #
-# What is deliberately NOT reviewed here, and why:
+# Currently tuned for: PR base `baseline` (the tenancy and money-layer work).
+#   71 files reviewed, including the migrations, which are the point of it.
 #
-#   drizzle/meta/**      machine-generated schema snapshots, thousands of
-#                        lines, nothing a reviewer can act on
-#   drizzle/*.sql        migrations; reviewed in the focused PR against the
-#                        `baseline` branch, where they are the point
-#   src/__tests__/**     large, and covered by the focused PR
+# The PR against base `main` (the full-tree audit of the inherited Footloose
+# source) reads 112 files under this config and will report being over the
+# limit. That is expected and accepted: its review is complete — eight rounds
+# of findings have been applied and pushed — and it is now only waiting to be
+# merged. To put it back under the cap, restore `!drizzle/**` below.
+#
+# What is deliberately NOT reviewed, and why:
+#
+#   drizzle/meta/**      machine-generated schema snapshots — thousands of
+#                        lines of JSON, nothing a reviewer can act on.
+#                        Do not "helpfully" re-include these; they are the
+#                        reason the migrations had to be excluded before.
+#   src/__tests__/**     large; re-including them together with the migrations
+#                        puts the baseline PR at exactly 100, with no margin
 #   src/docs, swagger.js generated API description, not hand-written logic
 #   Dockerfile, compose, build and tooling config rather than application code
 #   scripts, *.config.*
-#
-# The focused PR (base `baseline`, 65 files) reviews the tenancy and money
-# layer work including its migrations and tests. This one exists to audit the
-# inherited application source, so application source is what it keeps.
 
 reviews:
   path_filters:
-    - "!drizzle/**"
+    - "!drizzle/meta/**"
     - "!.github/**"
     - "!**/*.md"
     - "!src/__tests__/**"
