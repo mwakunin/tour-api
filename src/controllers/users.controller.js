@@ -61,7 +61,7 @@ export const fetchUserById = async (req, res, next) => {
     const { id } = validationResult.data;
     const user = await getUserById(id);
 
-    logger.info(`User ${user.email} retrieved successfully`);
+    logger.info(`User ${user.id} retrieved successfully`);
     res.json({
       message: 'User retrieved successfully',
       user,
@@ -135,7 +135,7 @@ export const updateUserById = async (req, res, next) => {
 
     const updatedUser = await updateUser(id, updates);
 
-    logger.info(`User ${updatedUser.email} updated successfully`);
+    logger.info(`User ${updatedUser.id} updated successfully`);
     res.json({
       message: 'User updated successfully',
       user: updatedUser,
@@ -186,10 +186,10 @@ export const deleteUserById = async (req, res, next) => {
     if (isAdmin && isOwnAccount) {
       return res.status(403).json({
         error: 'Operation denied',
-        message: 'Administrators cannot delete their own account. Please contact another admin.',
+        message:
+          'Administrators cannot delete their own account. Please contact another admin.',
       });
     }
-
 
     if (!isOwnAccount && !isAdmin) {
       return res.status(403).json({
@@ -198,11 +198,10 @@ export const deleteUserById = async (req, res, next) => {
       });
     }
 
-    
     const deletedUser = await deleteUser(id);
 
     logger.info(
-      `User ${deletedUser.email} deleted successfully by ${req.user.email}`
+      `User ${deletedUser.id} deleted successfully by ${req.user.id}`
     );
 
     res.json({

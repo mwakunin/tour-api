@@ -16,7 +16,7 @@
 import { and, eq } from 'drizzle-orm';
 
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
-import { obligations, settlements } from '#models/schema.js';
+import { obligations } from '#models/schema.js';
 import { decimalToCents } from '#utils/money.js';
 import logger from '#config/logger.js';
 import * as money from './money.service.js';
@@ -92,24 +92,9 @@ export const recordBookingSettlement = async ({ payment, booking }) => {
       return null;
     }
 
-    // Second line of defence behind the provider-side duplicate guards: one
-    // payment, one settlement. A retried callback that reaches here must not
-    // post the same money twice.
-    const existing = await withTenantDb((tx) =>
-      tx
-        .select({ id: settlements.id })
-        .from(settlements)
-        .where(eq(settlements.payment_id, payment.id))
-        .limit(1)
-    );
-    if (existing.length > 0) {
-      logger.info('[bookingLedger] settlement already recorded for payment', {
-        paymentId: payment.id,
-        settlementId: existing[0].id,
-      });
-      return null;
-    }
-
+    // One payment, one settlement — enforced by the partial unique index from
+    // migration 0012 rather than a read-then-insert check, which two retried
+    // callbacks could both pass before either wrote.
     const settlement = await money.recordSettlement({
       direction: 'in',
       method: payment.payment_method,
@@ -139,6 +124,15 @@ export const recordBookingSettlement = async ({ payment, booking }) => {
     });
     return settlement;
   } catch (error) {
+    // 23505 on the settlement index means a concurrent callback recorded this
+    // payment first. That is the guard working, not a failure.
+    if (error.cause?.code === '23505') {
+      logger.info('[bookingLedger] settlement already recorded for payment', {
+        paymentId: payment?.id,
+      });
+      return null;
+    }
+
     // The money has already moved. Losing the ledger entry is bad; rejecting a
     // payment that Safaricom has already taken is worse.
     logger.error('[bookingLedger] failed to record settlement', {

@@ -118,7 +118,7 @@ class EmailService {
                 ? `
               <div style="background: #fff3e0; padding: 15px; border-radius: 8px; margin: 20px 0;">
                 <p><strong>Special Requests:</strong></p>
-                <p>${booking.special_requests}</p>
+                <p>${escapeHtml(booking.special_requests)}</p>
               </div>
             `
                 : ''
@@ -262,7 +262,7 @@ class EmailService {
               <p><strong>Tour:</strong> ${booking.tour?.title || 'N/A'}</p>
               <p><strong>Original Date:</strong> ${new Date(booking.start_date).toLocaleDateString()}</p>
               <p><strong>Cancellation Date:</strong> ${new Date().toLocaleDateString()}</p>
-              ${booking.cancellation_reason ? `<p><strong>Reason:</strong> ${booking.cancellation_reason}</p>` : ''}
+              ${booking.cancellation_reason ? `<p><strong>Reason:</strong> ${escapeHtml(booking.cancellation_reason)}</p>` : ''}
             </div>
             
             <p>If you have any questions or would like to rebook, please contact us.</p>
@@ -337,16 +337,16 @@ class EmailService {
         from: this.fromEmail,
         to: [process.env.CONTACT_EMAIL || 'info@footlooseadventures.co.ke'],
         replyTo: email,
-        subject: `New Contact Form Submission from ${name}`,
+        subject: `New Contact Form Submission from ${escapeHtml(name)}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2>New Contact Form Submission</h2>
-            <p><strong>Name:</strong> ${name}</p>
-            <p><strong>Email:</strong> ${email}</p>
-            ${phone ? `<p><strong>Phone:</strong> ${phone}</p>` : ''}
+            <p><strong>Name:</strong> ${escapeHtml(name)}</p>
+            <p><strong>Email:</strong> ${escapeHtml(email)}</p>
+            ${phone ? `<p><strong>Phone:</strong> ${escapeHtml(phone)}</p>` : ''}
             <p><strong>Message:</strong></p>
             <div style="background: #f5f5f5; padding: 15px; border-radius: 5px;">
-              ${message}
+              ${escapeHtml(message)}
             </div>
           </div>
         `,
@@ -500,7 +500,7 @@ class EmailService {
                   <p><strong>Tour:</strong> ${booking.tour?.title || 'N/A'}</p>
                   <p><strong>Customer:</strong> ${escapeHtml(booking.customer_name)}</p>
                   <p><strong>Email:</strong> ${booking.customer_email}</p>
-                  <p><strong>Phone Number:</strong> ${booking.customer_phone}</p>
+                  <p><strong>Phone Number:</strong> ${escapeHtml(booking.customer_phone)}</p>
                   <p><strong>Group Size:</strong> ${groupSize} ${groupSize === 1 ? 'person' : 'people'}</p>
                   <p><strong>Total Amount:</strong> ${booking.currency} ${parseFloat(booking.total_price).toFixed(2)}</p>
                 </div>

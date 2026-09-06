@@ -330,7 +330,6 @@ export const handleMpesaCallback = async (callbackData) => {
           await emailService.sendPaymentConfirmation(booking);
           logger.info('Payment confirmation email sent:', {
             bookingId: booking.id,
-            email: booking.customer_email,
             receipt: mpesaReceiptNumber,
           });
         } catch (emailError) {

@@ -34,13 +34,12 @@ export const bookingCreateSchema = z
     country: z.string().min(2, 'Country is required').max(100),
     special_requests: z.string().max(1000).optional(),
 
-    // Status fields
-    status: z
-      .enum(['pending', 'confirmed', 'cancelled', 'completed'])
-      .default('pending'),
-    payment_status: z
-      .enum(['pending', 'paid', 'failed', 'refunded'])
-      .default('pending'),
+    // status and payment_status are deliberately NOT accepted here. They were,
+    // and createBooking spreads validated input straight into the insert — so a
+    // client could POST status:'confirmed', payment_status:'paid' and receive a
+    // confirmed, paid booking without paying for it. Both are set by the
+    // service; they change only through the payment flows and the admin update
+    // schema.
   })
   .refine((data) => data.end_date > data.start_date, {
     message: 'End date must be after start date',

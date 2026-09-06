@@ -154,6 +154,11 @@ export const createBooking = async (data) => {
           .values({
             tenant_id: currentTenantId(),
             ...validated,
+            // After the spread, so they cannot be overridden by input even if
+            // the schema is later loosened. A booking becomes confirmed or
+            // paid only through a payment flow.
+            status: 'pending',
+            payment_status: 'pending',
             booking_reference: bookingReference,
             price_per_person: pricePerPerson.toFixed(2),
             total_price: totalPrice.toFixed(2),

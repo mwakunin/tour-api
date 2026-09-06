@@ -32,7 +32,15 @@ const isTransactionMode = connectionUrl.includes(':6543'); // Transaction mode u
 const isRemote = connectionUrl.includes('pooler.supabase.com');
 
 const pool = postgres(connectionUrl, {
-  max: process.env.NODE_ENV === 'production' ? 15 : 3,
+  // The app runs two pools now — this one as the owner, appDatabase as the
+  // RLS-constrained runtime role — but the non-production default was still
+  // sized for one. With withTenantDb opening a short transaction per
+  // operation, three connections per pool was tight enough that suite runs
+  // intermittently timed out acquiring one. Overridable for constrained
+  // environments.
+  max:
+    Number(process.env.DB_POOL_MAX) ||
+    (process.env.NODE_ENV === 'production' ? 15 : 10),
   idle_timeout: 60,
   connect_timeout: isRemote ? 30 : 10,
   prepare: !isTransactionMode, // Session pooler SUPPORTS prepared statements!

@@ -186,6 +186,12 @@ export const deleteDestinationController = async (req, res, next) => {
     }
 
     logger.error('[Destination Controller] Delete error:', error);
+    // Still has tours attached: a conflict the caller can resolve, not a
+    // server fault. Previously fell through to the generic 500.
+    if (/associated tour/i.test(error.message)) {
+      return res.status(409).json({ success: false, error: error.message });
+    }
+
     next(error);
   }
 };

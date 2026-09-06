@@ -85,6 +85,13 @@
       "when": 1788621839548,
       "tag": "0011_drop_tenant_id_default",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788673870886,
+      "tag": "0012_unique_settlement_per_payment",
+      "breakpoints": true
     }
   ]
 }

@@ -85,25 +85,13 @@ class Cache {
    * WARNING: KEYS command can be slow on large datasets
    * Consider using SCAN in production with large key counts
    */
-  async delPattern(pattern) {
-    if (!this.isHealthy) {
-      return;
-    }
-
-    try {
-      const keys = await this.redis.keys(pattern);
-      if (keys.length > 0) {
-        await this.redis.del(...keys);
-        logger.debug(
-          `[Cache] Deleted ${keys.length} keys matching: ${pattern}`
-        );
-      }
-    } catch (error) {
-      logger.error(
-        `[Cache] Delete pattern error for ${pattern}:`,
-        error.message
-      );
-    }
+  // Not async: it returns delPatternSafe's promise directly, and marking it
+  // async only to look symmetrical trips require-await.
+  delPattern(pattern) {
+    // Delegates to the SCAN-based implementation below. KEYS blocks Redis's
+    // single thread for the whole scan, and this runs on every mutation —
+    // tenant-namespaced keys only increase how many there are to walk.
+    return this.delPatternSafe(pattern);
   }
 
   /**

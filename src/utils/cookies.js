@@ -17,7 +17,7 @@ export const cookies = {
     try {
       const defaultOptions = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: _isSecureContext(),
         sameSite: 'lax',
         maxAge: 24 * 60 * 60 * 1000, // 24 hours by default
         path: '/',
@@ -56,7 +56,7 @@ export const cookies = {
     try {
       const clearOptions = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
+        secure: _isSecureContext(),
         sameSite: 'lax',
         path: '/',
         ...options,
@@ -138,7 +138,7 @@ export const cookies = {
   setSecureToken: (res, name, token, additionalOptions = {}) => {
     const secureOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: _isSecureContext(),
       sameSite: 'strict', // More secure for tokens
       maxAge: 60 * 60 * 1000, // 1 hour default for tokens
       path: '/',
@@ -155,7 +155,7 @@ export const cookies = {
   setSession: (res, name, value, additionalOptions = {}) => {
     const sessionOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: _isSecureContext(),
       sameSite: 'lax',
       path: '/',
       // No maxAge - session cookie

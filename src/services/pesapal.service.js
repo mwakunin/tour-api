@@ -432,8 +432,22 @@ export async function verifyPesapalPayment(orderTrackingId) {
           paymentId: payment.id,
         });
       }
-    } else if (isFailed && payment.status !== 'failed') {
-      await handleFailedPayment(payment.booking_id, orderTrackingId);
+    } else if (isFailed) {
+      // Same conditional-claim as the completion branch above, and it must not
+      // move a payment that has already completed.
+      const claimed = await withTenantDb((tx) =>
+        tx
+          .update(payments)
+          .set({ status: 'failed' })
+          .where(
+            and(eq(payments.id, payment.id), eq(payments.status, 'pending'))
+          )
+          .returning({ id: payments.id })
+      );
+
+      if (claimed.length > 0) {
+        await handleFailedPayment(payment.booking_id, orderTrackingId);
+      }
     }
 
     return {
