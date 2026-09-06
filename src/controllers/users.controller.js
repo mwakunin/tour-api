@@ -12,6 +12,10 @@ import {
 } from '#validations/users.validation.js';
 import { formatValidationError } from '#utils/format.js';
 
+// Log lines are newline-delimited, so an id carrying CR/LF can forge extra
+// entries. These are logged before validation runs, so they are sanitised here.
+const safeForLog = (value) => String(value).replace(/[^\w-]/g, '');
+
 export const fetchAllUsers = async (req, res, next) => {
   try {
     logger.info('Getting users...');
@@ -46,7 +50,7 @@ export const fetchAllUsers = async (req, res, next) => {
 
 export const fetchUserById = async (req, res, next) => {
   try {
-    logger.info(`Getting user by id: ${req.params.id}`);
+    logger.info(`Getting user by id: ${safeForLog(req.params.id)}`);
 
     // Validate the user ID parameter
     const validationResult = userIdSchema.safeParse({ id: req.params.id });
@@ -79,7 +83,7 @@ export const fetchUserById = async (req, res, next) => {
 
 export const updateUserById = async (req, res, next) => {
   try {
-    logger.info(`Updating user: ${req.params.id}`);
+    logger.info(`Updating user: ${safeForLog(req.params.id)}`);
 
     // Validate the user ID parameter
     const idValidationResult = userIdSchema.safeParse({ id: req.params.id });
@@ -157,7 +161,7 @@ export const updateUserById = async (req, res, next) => {
 
 export const deleteUserById = async (req, res, next) => {
   try {
-    logger.info(`Deleting user: ${req.params.id}`);
+    logger.info(`Deleting user: ${safeForLog(req.params.id)}`);
 
     // Validate the user ID parameter
     const validationResult = userIdSchema.safeParse({ id: req.params.id });

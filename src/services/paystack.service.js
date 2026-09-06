@@ -380,6 +380,9 @@ export const handlePaystackWebhook = async (payload, signature, rawBody) => {
  */
 export const getSupportedBanks = async () => {
   try {
+    // Without this a missing PAYSTACK_SECRET_KEY sent 'Bearer undefined'
+    // and surfaced as a provider auth error rather than a config error.
+    requirePaystackConfig();
     const response = await axios.get(`${PAYSTACK_BASE_URL}/bank?currency=KES`, {
       headers: {
         Authorization: `Bearer ${paystackConfig.secretKey}`,

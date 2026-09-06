@@ -101,8 +101,15 @@ export const getFeaturedToursController = async (req, res, next) => {
 
 export const getDealsController = async (req, res, next) => {
   try {
-    const { limit = 10 } = req.query;
-    const { data, cached } = await getDeals(parseInt(limit));
+    // Same clamp as getFeaturedToursController; NaN reached the query here.
+    const parsedLimit = Number.parseInt(req.query.limit ?? '10', 10);
+    if (Number.isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      return res.status(400).json({
+        success: false,
+        error: 'limit must be a number between 1 and 100',
+      });
+    }
+    const { data, cached } = await getDeals(parsedLimit);
 
     res.json({
       success: true,

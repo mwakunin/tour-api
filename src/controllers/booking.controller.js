@@ -165,7 +165,8 @@ export const getBookingByReferenceController = async (req, res, next) => {
     const { email } = req.query;
     if (
       !email ||
-      data.customer_email.toLowerCase() !== String(email).toLowerCase()
+      String(data.customer_email ?? '').toLowerCase() !==
+        String(email).toLowerCase()
     ) {
       return res.status(404).json({
         success: false,

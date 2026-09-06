@@ -34,7 +34,6 @@ export const sendContactMessage = async (req, res) => {
       error.name === 'ZodError' ||
       error.constructor.name === 'ZodError'
     ) {
-      console.log('🔍 Zod error detected'); // DEBUG
       return res.status(400).json({
         success: false,
         error: 'Validation failed',

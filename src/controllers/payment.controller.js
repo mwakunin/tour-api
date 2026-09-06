@@ -262,8 +262,14 @@ export const pesapalIPN = async (req, res) => {
     await handlePesapalIPN(data);
     res.sendStatus(200);
   } catch (error) {
-    logger.error('Error in Pesapal IPN:', error);
-    res.sendStatus(200);
+    // Non-success so Pesapal retries, matching the M-Pesa callback. A 200 here
+    // told the provider the notification was handled, so a transient failure
+    // silently discarded a payment the customer had already made. The
+    // validation-rejection branch above still answers 200 deliberately.
+    logger.error('Error in Pesapal IPN, asking for retry:', {
+      error: error.message,
+    });
+    res.sendStatus(500);
   }
 };
 
@@ -312,7 +318,9 @@ export const pesapalCallback = async (req, res) => {
       // Handle failed payment
       if (result.status === 'Failed' || result.status === 'Invalid') {
         return res.redirect(
-          `${process.env.FRONTEND_URL}/payment/failed?reference=${OrderMerchantReference}&reason=${result.status}`
+          `${process.env.FRONTEND_URL}/payment/failed?reference=${encodeURIComponent(
+            OrderMerchantReference
+          )}&reason=${encodeURIComponent(result.status)}`
         );
       }
 

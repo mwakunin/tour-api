@@ -152,8 +152,11 @@ export const createBooking = async (data) => {
         tx
           .insert(bookings)
           .values({
-            tenant_id: currentTenantId(),
             ...validated,
+            // Assigned after the spread so caller input cannot set it. Not
+            // exploitable today — every spread here is Zod output and the schemas
+            // strip unknown keys — but the ordering is the thing that guarantees it.
+            tenant_id: currentTenantId(),
             // After the spread, so they cannot be overridden by input even if
             // the schema is later loosened. A booking becomes confirmed or
             // paid only through a payment flow.

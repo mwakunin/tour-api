@@ -118,11 +118,11 @@ export const createTour = async (data) => {
     // discount_percentage is DERIVED from the compare-at prices, never taken
     // from client input, so it can't drift from the tiers it describes.
     const tourData = {
-      // Explicit rather than relying on the column DEFAULT — that default is a
-      // temporary crutch and leaning on it is the silent cross-tenant write
-      // this change exists to remove.
-      tenant_id: currentTenantId(),
       ...validated,
+      // Assigned after the spread so caller input cannot set it. Not
+      // exploitable today — every spread here is Zod output and the schemas
+      // strip unknown keys — but the ordering is the thing that guarantees it.
+      tenant_id: currentTenantId(),
       price_amount: validated.pricing?.amount?.toString() ?? null,
       price_currency: validated.pricing?.currency ?? null,
       compare_at_amount:

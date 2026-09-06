@@ -301,8 +301,10 @@ export const createBlogPost = async (postData, authorId) => {
       tx
         .insert(blogPosts)
         .values({
-          tenant_id: currentTenantId(),
           ...postData,
+          // After the spread: caller-supplied input must not be able to set
+          // tenant_id and write into another operator's data.
+          tenant_id: currentTenantId(),
           slug,
           read_time_minutes,
           published_at,
@@ -432,8 +434,10 @@ export const createBlogCategory = async (categoryData) => {
       tx
         .insert(blogCategories)
         .values({
-          tenant_id: currentTenantId(),
           ...categoryData,
+          // After the spread: caller-supplied input must not be able to set
+          // tenant_id and write into another operator's data.
+          tenant_id: currentTenantId(),
           slug,
         })
         .returning()

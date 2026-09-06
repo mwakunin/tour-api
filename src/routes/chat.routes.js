@@ -13,7 +13,13 @@ const CHAT_WEBHOOK_URL = process.env.CHAT_WEBHOOK_URL;
 
 // The upstream is a workflow engine that can hang. Without a bound, a slow
 // n8n holds this request — and its socket — open indefinitely.
-const UPSTREAM_TIMEOUT_MS = Number(process.env.CHAT_TIMEOUT_MS || 15000);
+const parsedChatTimeout = Number(process.env.CHAT_TIMEOUT_MS);
+// Number('abc') is NaN and setTimeout(fn, NaN) fires immediately, so a
+// mistyped value would abort every chat request instead of bounding it.
+const UPSTREAM_TIMEOUT_MS =
+  Number.isFinite(parsedChatTimeout) && parsedChatTimeout > 0
+    ? parsedChatTimeout
+    : 15000;
 
 /**
  * POST /api/chat
@@ -29,8 +35,13 @@ router.post('/', publicSecurityMiddleware, async (req, res) => {
   // cancelled browser request leaves the upstream call running.
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
-  const onClientAbort = () => controller.abort();
-  req.on('aborted', onClientAbort);
+  // res 'close' rather than the deprecated req 'aborted'. Guarded on
+  // writableEnded so a normally completed response does not abort a fetch that
+  // has already delivered.
+  const onClientAbort = () => {
+    if (!res.writableEnded) controller.abort();
+  };
+  res.on('close', onClientAbort);
 
   try {
     const response = await fetch(CHAT_WEBHOOK_URL, {
@@ -56,7 +67,7 @@ router.post('/', publicSecurityMiddleware, async (req, res) => {
     res.status(502).json({ error: 'Chat service unavailable' });
   } finally {
     clearTimeout(timeout);
-    req.off('aborted', onClientAbort);
+    res.off('close', onClientAbort);
   }
 });
 

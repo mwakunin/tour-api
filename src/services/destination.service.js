@@ -26,10 +26,11 @@ export const createDestination = async (data) => {
       tx
         .insert(destinations)
         .values({
-          // Explicit, not leaning on the column DEFAULT — relying on that is the
-          // silent cross-tenant write this whole change exists to remove.
-          tenant_id: currentTenantId(),
           ...validated,
+          // Assigned after the spread so caller input cannot set it. Not
+          // exploitable today — every spread here is Zod output and the schemas
+          // strip unknown keys — but the ordering is the thing that guarantees it.
+          tenant_id: currentTenantId(),
           updated_at: new Date(),
         })
         .returning()
