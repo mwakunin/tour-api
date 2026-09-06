@@ -21,6 +21,7 @@ import { buildTestPricingPeriod } from '../helpers/tour.helper.js';
 import { cache } from '#utils/cache.js';
 import { CacheKeys } from '#utils/cacheKeys.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
+import { runWithTenant } from '#config/tenantContext.js';
 
 describe('Tour CRUD Integration Tests', () => {
   beforeAll(async () => {
@@ -759,7 +760,9 @@ describe('Tour CRUD Integration Tests', () => {
     });
 
     it('GET /api/tours/deals - should get deal tours', async () => {
-      await cache.delPattern(CacheKeys.patterns.toursDeals());
+      await runWithTenant(SEED_TENANT_ID, () =>
+        cache.delPattern(CacheKeys.patterns.toursDeals())
+      );
       const response = await request(app).get('/api/tours/deals').expect(200);
 
       expect(response.body.success).toBe(true);
@@ -808,7 +811,9 @@ describe('Tour CRUD Integration Tests', () => {
         .returning();
 
       try {
-        await cache.delPattern(CacheKeys.patterns.toursDeals());
+        await runWithTenant(SEED_TENANT_ID, () =>
+          cache.delPattern(CacheKeys.patterns.toursDeals())
+        );
         const response = await request(app).get('/api/tours/deals').expect(200);
 
         const ids = response.body.data.map((t) => t.id);
@@ -817,7 +822,9 @@ describe('Tour CRUD Integration Tests', () => {
         expect(ids).toContain(testTour.id);
       } finally {
         await db.delete(tours).where(eq(tours.id, expired.id));
-        await cache.delPattern(CacheKeys.patterns.toursDeals());
+        await runWithTenant(SEED_TENANT_ID, () =>
+          cache.delPattern(CacheKeys.patterns.toursDeals())
+        );
       }
     });
 
@@ -855,7 +862,9 @@ describe('Tour CRUD Integration Tests', () => {
       });
 
       try {
-        await cache.delPattern(CacheKeys.patterns.toursDeals());
+        await runWithTenant(SEED_TENANT_ID, () =>
+          cache.delPattern(CacheKeys.patterns.toursDeals())
+        );
         const response = await request(app).get('/api/tours/deals').expect(200);
 
         // Always an array, including for the fixture tour that has none —
@@ -872,7 +881,9 @@ describe('Tour CRUD Integration Tests', () => {
       } finally {
         await db.delete(tours).where(eq(tours.id, withDest.id));
         await deleteTestDestination(destination.id);
-        await cache.delPattern(CacheKeys.patterns.toursDeals());
+        await runWithTenant(SEED_TENANT_ID, () =>
+          cache.delPattern(CacheKeys.patterns.toursDeals())
+        );
       }
     });
 

@@ -8,6 +8,7 @@ import { eq } from 'drizzle-orm';
 import { emailService } from './email.service.js';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
+import { decimalToCents } from '#utils/money.js';
 
 const PESAPAL_LIVE_URL = 'https://pay.pesapal.com/v3';
 const PESAPAL_SANDBOX_URL = 'https://cybqa.pesapal.com/pesapalv3';
@@ -375,6 +376,30 @@ export async function verifyPesapalPayment(orderTrackingId) {
 
     const isCompleted = payment_status_description === 'Completed';
     const isFailed = ['Failed', 'Invalid'].includes(payment_status_description);
+
+    // Confirm the provider is telling us about the amount we actually asked
+    // for. Without this a tampered or mismatched callback marks a booking paid
+    // for whatever the provider reports — Paystack verification already does
+    // this comparison.
+    if (isCompleted) {
+      const expectedCents = decimalToCents(payment.amount);
+      const reportedCents = decimalToCents(amount);
+      if (expectedCents !== reportedCents || currency !== payment.currency) {
+        logger.error(
+          'Pesapal amount/currency mismatch — refusing to complete',
+          {
+            orderTrackingId,
+            expected: `${payment.amount} ${payment.currency}`,
+            reported: `${amount} ${currency}`,
+          }
+        );
+        return {
+          success: false,
+          status: 'mismatch',
+          message: 'Reported payment does not match the recorded amount',
+        };
+      }
+    }
 
     if (isCompleted && payment.status !== 'completed') {
       await handleSuccessfulPayment(

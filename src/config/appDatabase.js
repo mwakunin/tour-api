@@ -27,12 +27,19 @@ const connectionUrl = isDocker
   ? process.env.DOCKER_APP_DATABASE_URL || process.env.APP_DATABASE_URL
   : process.env.APP_DATABASE_URL;
 
+// Throw rather than process.exit. This module is imported by tests and
+// tooling, and exiting at module scope kills the whole runner with no stack,
+// turning a missing environment variable into an unexplained crash. A thrown
+// error is reported against the import that caused it.
+//
+// Not defaulted to an empty string either: postgres.js would happily fall back
+// to localhost defaults and fail later with a connection error that says
+// nothing about the real cause.
 if (!connectionUrl) {
-  logger.error(
+  throw new Error(
     '[AppDB] APP_DATABASE_URL is required — the RLS-constrained runtime ' +
       'connection. Run `pnpm run db:app-role` to provision the role.'
   );
-  process.exit(1);
 }
 
 const isRemote = connectionUrl.includes('pooler.supabase.com');

@@ -68,7 +68,10 @@ const findRate = async (tx, { tenantId, from, to, onDate }) => {
         or(eq(fx_rates.tenant_id, tenantId), isNull(fx_rates.tenant_id))
       )
     )
-    .orderBy(desc(fx_rates.as_of), desc(fx_rates.tenant_id))
+    // NULLS LAST, not `desc(tenant_id)`: Postgres sorts NULLs first in DESC,
+    // so the shared rate was beating the tenant's own contracted rate whenever
+    // both existed for the same date.
+    .orderBy(desc(fx_rates.as_of), sql`${fx_rates.tenant_id} DESC NULLS LAST`)
     .limit(1);
   return rate ?? null;
 };
@@ -346,16 +349,24 @@ export const allocate = ({
   note = null,
 }) =>
   withTenantDb(async (tx) => {
+    // FOR UPDATE on both sides. The over-allocation checks below are
+    // read-then-write, so without locking two concurrent callbacks for the
+    // same booking both read the same outstanding amount, both pass, and both
+    // insert — the obligation ends up over-settled and the ledger disagrees
+    // with the cash. Locking in a fixed order (obligation, then settlement)
+    // also keeps two allocations touching the same pair from deadlocking.
     const [obligation] = await tx
       .select()
       .from(obligations)
       .where(eq(obligations.id, obligationId))
-      .limit(1);
+      .limit(1)
+      .for('update');
     const [settlement] = await tx
       .select()
       .from(settlements)
       .where(eq(settlements.id, settlementId))
-      .limit(1);
+      .limit(1)
+      .for('update');
 
     // RLS makes a cross-tenant row invisible rather than forbidden, so a
     // missing row here may mean "belongs to someone else", not "absent".

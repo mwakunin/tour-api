@@ -49,7 +49,7 @@ export const createInquiry = async (req, res) => {
         success: false,
         error: 'Validation failed',
         details:
-          error.errors?.map((e) => ({
+          error.issues?.map((e) => ({
             field: e.path.join('.'),
             message: e.message,
           })) || [],

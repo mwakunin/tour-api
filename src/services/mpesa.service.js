@@ -233,6 +233,18 @@ export const handleMpesaCallback = async (callbackData) => {
       return { success: false, message: 'Payment not found' };
     }
 
+    // Safaricom retries callbacks. Without this guard a retry re-runs the
+    // completion path and records the same money a second time, so the ledger
+    // shows twice what the customer actually paid. Matches the early-return
+    // Paystack verification already does.
+    if (payment.status === 'completed') {
+      logger.info('M-Pesa callback ignored, payment already completed', {
+        paymentId: payment.id,
+        checkoutRequestId: CheckoutRequestID,
+      });
+      return { success: true, message: 'Payment already processed' };
+    }
+
     // Check if payment was successful
     if (ResultCode === 0) {
       // Extract metadata

@@ -579,6 +579,12 @@ export const cancelBooking = async (id) => {
     );
 
     if (cancelled) {
+      // cancelBooking is a separate path from updateBookingStatus, so voiding
+      // has to happen here too — otherwise a booking cancelled through this
+      // route keeps showing as money owed. Safe to repeat: it only touches
+      // rows still 'open'.
+      await voidBookingReceivables(cancelled.id);
+
       // Send cancellation email
       try {
         await emailService.sendBookingCancellation(bookingToCancel);

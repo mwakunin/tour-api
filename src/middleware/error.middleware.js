@@ -21,7 +21,7 @@ export const errorHandler = (err, req, res, _next) => {
     return res.status(400).json({
       success: false,
       error: 'Validation error',
-      details: err.errors.map((e) => ({
+      details: err.issues.map((e) => ({
         field: e.path.join('.'),
         message: e.message,
       })),
@@ -101,7 +101,13 @@ export const errorHandler = (err, req, res, _next) => {
 
   // Default error response
   const statusCode = err.statusCode || 500;
-  const message = err.message || 'Internal server error';
+  // A 5xx message is internal — Postgres errors carry query text, constraint
+  // names and file paths. Deliberate 4xx messages are written for the client
+  // and still go through.
+  const message =
+    statusCode >= 500
+      ? 'Internal server error'
+      : err.message || 'Request could not be processed';
 
   res.status(statusCode).json({
     success: false,

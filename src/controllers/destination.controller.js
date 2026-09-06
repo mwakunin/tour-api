@@ -43,7 +43,7 @@ export const getAllDestinations = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'Invalid query parameters',
-        details: error.errors,
+        details: error.issues,
       });
     }
     logger.error('[Destination Controller] Get all error:', error);
@@ -118,7 +118,7 @@ export const createDestinationController = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'Validation error',
-        details: error.errors,
+        details: error.issues,
       });
     }
     logger.error('[Destination Controller] Create error:', error);
@@ -150,7 +150,7 @@ export const updateDestinationController = async (req, res, next) => {
       return res.status(400).json({
         success: false,
         error: 'Validation error',
-        details: error.errors,
+        details: error.issues,
       });
     }
     logger.error('[Destination Controller] Update error:', error);

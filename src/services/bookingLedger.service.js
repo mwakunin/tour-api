@@ -16,7 +16,7 @@
 import { and, eq } from 'drizzle-orm';
 
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
-import { obligations } from '#models/schema.js';
+import { obligations, settlements } from '#models/schema.js';
 import { decimalToCents } from '#utils/money.js';
 import logger from '#config/logger.js';
 import * as money from './money.service.js';
@@ -89,6 +89,24 @@ export const recordBookingSettlement = async ({ payment, booking }) => {
           paymentId: payment.id,
         }
       );
+      return null;
+    }
+
+    // Second line of defence behind the provider-side duplicate guards: one
+    // payment, one settlement. A retried callback that reaches here must not
+    // post the same money twice.
+    const existing = await withTenantDb((tx) =>
+      tx
+        .select({ id: settlements.id })
+        .from(settlements)
+        .where(eq(settlements.payment_id, payment.id))
+        .limit(1)
+    );
+    if (existing.length > 0) {
+      logger.info('[bookingLedger] settlement already recorded for payment', {
+        paymentId: payment.id,
+        settlementId: existing[0].id,
+      });
       return null;
     }
 

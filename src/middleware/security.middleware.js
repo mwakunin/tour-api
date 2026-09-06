@@ -50,8 +50,13 @@ export const authSecurityMiddleware = async (req, res, next) => {
 
     next();
   } catch (e) {
+    // Fail closed. If the protection layer itself fails, letting the request
+    // through is the one outcome that defeats having it.
     logger.error('Auth security middleware error:', e);
-    next();
+    return res.status(503).json({
+      error: 'Service Unavailable',
+      message: 'Request could not be processed. Please try again.',
+    });
   }
 };
 
@@ -96,8 +101,12 @@ export const publicSecurityMiddleware = async (req, res, next) => {
 
     next();
   } catch (e) {
+    // Fail closed, as above.
     logger.error('Public security middleware error:', e);
-    next();
+    return res.status(503).json({
+      error: 'Service Unavailable',
+      message: 'Request could not be processed. Please try again.',
+    });
   }
 };
 

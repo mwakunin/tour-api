@@ -928,7 +928,11 @@ export const getToursWithDestinations = async (filters = {}) => {
 
         // Filter by destination using junction table
         if (normalizedFilters.destination_id) {
-          const toursWithDestination = withTenantDb((tx) =>
+          // Awaited and unwrapped to ids, not passed through as a builder.
+          // This was a Drizzle subquery before the move to withTenantDb, which
+          // returns a promise — inArray would have received a Promise object
+          // and silently built nonsense.
+          const rows = await withTenantDb((tx) =>
             tx
               .select({ tour_id: tourDestinations.tour_id })
               .from(tourDestinations)
@@ -939,8 +943,15 @@ export const getToursWithDestinations = async (filters = {}) => {
                 )
               )
           );
+          const tourIds = rows.map((row) => row.tour_id);
 
-          conditions.push(inArray(tours.id, toursWithDestination));
+          if (tourIds.length === 0) {
+            // No tour serves this destination. Without this, inArray on an
+            // empty array is a SQL error in some drivers and a match-everything
+            // in others; neither is "no results".
+            return [];
+          }
+          conditions.push(inArray(tours.id, tourIds));
         }
         // ✅ Date/Availability filter
         if (normalizedFilters.date) {

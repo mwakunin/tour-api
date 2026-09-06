@@ -155,12 +155,21 @@ export const getBookingByReferenceController = async (req, res, next) => {
       });
     }
 
-    // Optional: Verify email if provided
+    // This route is public, and a booking carries the customer's name, email,
+    // phone and itinerary. The email was previously optional, so anyone who
+    // guessed a reference — they are sequential-ish, FA-YYYY-NNNNNN — got all
+    // of it. It is now required and must match.
+    //
+    // Returning the same 404 as a missing booking is deliberate: a distinct
+    // 403 would confirm which references exist.
     const { email } = req.query;
-    if (email && data.customer_email.toLowerCase() !== email.toLowerCase()) {
-      return res.status(403).json({
+    if (
+      !email ||
+      data.customer_email.toLowerCase() !== String(email).toLowerCase()
+    ) {
+      return res.status(404).json({
         success: false,
-        error: 'Booking reference and email do not match',
+        error: 'Booking not found',
       });
     }
 

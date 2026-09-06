@@ -30,7 +30,8 @@ describe('Error Middleware', () => {
     it('should handle Zod validation errors', () => {
       const zodError = {
         name: 'ZodError',
-        errors: [
+        // Zod 4 exposes `issues`, not `errors`.
+        issues: [
           {
             path: ['email'],
             message: 'Invalid email format',
@@ -135,9 +136,12 @@ describe('Error Middleware', () => {
       errorHandler(unknownError, mockReq, mockRes, mockNext);
 
       expect(mockRes.status).toHaveBeenCalledWith(500);
+      // 5xx messages are internal — Postgres errors carry query text,
+      // constraint names and paths — so the client gets a generic string and
+      // the detail stays in the server log.
       expect(mockRes.json).toHaveBeenCalledWith({
         success: false,
-        error: 'Something went wrong',
+        error: 'Internal server error',
       });
     });
 

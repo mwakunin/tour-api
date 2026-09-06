@@ -1,3 +1,5 @@
+import { currentTenantId } from '#config/tenantContext.js';
+
 // src/utils/cacheKeys.js
 /**
  * Centralized cache key management
@@ -25,7 +27,7 @@ const serializeFilters = (filters = {}) => {
   return sorted || 'default';
 };
 
-export const CacheKeys = {
+const rawCacheKeys = {
   // ============= DESTINATIONS =============
   destination: (id) => `destination:${id}`,
 
@@ -179,6 +181,40 @@ export const CacheKeys = {
     allStats: () => 'stats:*',
   },
 };
+
+/**
+ * Tenant-namespaces every cache key.
+ *
+ * Redis sits outside Postgres, so row-level security cannot reach it: an
+ * unprefixed `tours:list:...` written while serving one operator would be
+ * served straight back to the next. That is a cross-tenant leak through the
+ * one door the policies do not guard.
+ *
+ * Wrapping centrally rather than editing ~60 key builders and every call site
+ * means a key added later is namespaced by construction instead of by whoever
+ * remembers.
+ *
+ * With no tenant in context the prefix is `global` rather than nothing, so
+ * unscoped keys occupy their own namespace and still cannot collide with a
+ * tenant's.
+ */
+const namespaceKeys = (node) => {
+  if (typeof node === 'function') {
+    return (...args) => {
+      const key = node(...args);
+      const tenant = currentTenantId() ?? 'global';
+      return typeof key === 'string' ? `t:${tenant}:${key}` : key;
+    };
+  }
+  if (node && typeof node === 'object') {
+    return Object.fromEntries(
+      Object.entries(node).map(([k, v]) => [k, namespaceKeys(v)])
+    );
+  }
+  return node;
+};
+
+export const CacheKeys = namespaceKeys(rawCacheKeys);
 
 // ============= HELPER FUNCTIONS =============
 
