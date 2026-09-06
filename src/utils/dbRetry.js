@@ -15,6 +15,12 @@ const TERMINAL_CODES = new Set(['CONNECTION_ENDED']);
 // text says. Checked before the bail-out list below, because a dropped or
 // timed-out connection can phrase itself in ways that list would catch.
 const TRANSIENT_CODES = new Set([
+  // Postgres tells a caller to try again with these two, and they are the
+  // errors contention produces rather than a broken statement: retrying is
+  // the documented response. They matter more now that cancellation and
+  // Pesapal settlement each hold one larger, lock-taking transaction.
+  '40001', // serialization_failure
+  '40P01', // deadlock_detected
   'CONNECT_TIMEOUT',
   'CONNECTION_CLOSED',
   'CONNECTION_DESTROYED',

@@ -5,6 +5,7 @@ import { generateInvoicePDF } from '../utils/invoiceGenerator.js';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { tenants } from '#models/tenant.model.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import { and, eq, gte, lt } from 'drizzle-orm';
 
 // Subject lines are not HTML, so escaping them corrupts what the recipient
@@ -41,6 +42,10 @@ const FROM_EMAIL =
 const ADMIN_EMAIL =
   process.env.ADMIN_EMAIL || 'footlooseadventures2026@gmail.com';
 
+// Read the same way tenant.middleware reads it, so an overridden seed id does
+// not silently stop matching here.
+const seedTenantId = () => process.env.SEED_TENANT_ID || SEED_TENANT_ID;
+
 // ✅ GOOD - Class-based service (easily mockable)
 class EmailService {
   constructor() {
@@ -70,17 +75,29 @@ class EmailService {
           .where(eq(tenants.id, tenantId))
           .limit(1)
       );
-      return tenant?.email || this.adminEmail;
-    } catch (error) {
-      // A lookup failure is not a reason to drop the notification.
-      logger.warn(
-        'Tenant admin email lookup failed, using configured default',
-        {
-          tenantId,
-          error: error.message,
-        }
+      if (tenant?.email) return tenant.email;
+
+      // No address on the tenant. The env var is only the right answer for
+      // the tenant this deployment was configured around — the seeded one,
+      // where ADMIN_EMAIL is that operator's own address. Handing it to any
+      // other operator would send their customers' data to the first
+      // operator's inbox, which is the leak this column exists to close.
+      if (tenantId === seedTenantId()) return this.adminEmail;
+
+      logger.error(
+        'No admin_email configured for tenant; refusing to send to the ' +
+          'deployment-wide address',
+        { tenantId }
       );
-      return this.adminEmail;
+      return null;
+    } catch (error) {
+      // A lookup failure must not quietly redirect one operator's mail to
+      // another's inbox either.
+      logger.error('Tenant admin email lookup failed', {
+        tenantId,
+        error: error.message,
+      });
+      return tenantId === seedTenantId() ? this.adminEmail : null;
     }
   }
 
@@ -517,9 +534,12 @@ class EmailService {
     try {
       const groupSize = booking.pax || booking.group_size || 1;
 
+      const adminEmail = await this.resolveAdminEmail();
+      if (!adminEmail) return null;
+
       const { data, error } = await this.resend.emails.send({
         from: this.fromEmail,
-        to: [await this.resolveAdminEmail()],
+        to: [adminEmail],
         subject: `🎉 New Booking: ${booking.booking_reference}`,
         html: `
           <!DOCTYPE html>
@@ -611,9 +631,12 @@ class EmailService {
         (b) => b.payment_status === 'paid'
       ).length;
 
+      const adminEmail = await this.resolveAdminEmail();
+      if (!adminEmail) return null;
+
       const { data, error } = await this.resend.emails.send({
         from: this.fromEmail,
-        to: [await this.resolveAdminEmail()],
+        to: [adminEmail],
         subject: `📊 Daily Booking Summary - ${today.toLocaleDateString()}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">

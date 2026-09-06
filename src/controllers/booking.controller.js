@@ -100,6 +100,10 @@ export const getUserBookingsController = async (req, res, next) => {
 
     const { data, cached } = await getUserBookings(userId, {
       status,
+      // page, not just offset: CacheKeys.userBookings builds the key from
+      // page and defaults a missing one to 1, so every page shared the
+      // page-one entry and page two served page one's rows for five minutes.
+      page,
       limit,
       offset,
     });

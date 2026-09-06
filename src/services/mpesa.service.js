@@ -398,7 +398,15 @@ export const handleMpesaCallback = async (callbackData) => {
             status: 'failed',
             response_data: JSON.stringify(callbackData),
           })
-          .where(eq(payments.id, payment.id))
+          // payment.status was read well before this ran, so it is stale by
+          // now. Matching on id alone, a late failure callback could write
+          // 'failed' over a completion another callback had already committed,
+          // leaving a paid, confirmed booking with a settlement posted against
+          // a payment row that says it failed. paystack and pesapal already
+          // guard their failure paths this way.
+          .where(
+            and(eq(payments.id, payment.id), eq(payments.status, 'pending'))
+          )
       );
 
       logger.error('Payment failed:', { ResultCode, ResultDesc });

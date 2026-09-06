@@ -125,7 +125,20 @@ export const toBaseCents = async (
 
   const converted =
     (BigInt(Math.trunc(amountCents)) * BigInt(rate.rate_ppm) + PPM / 2n) / PPM;
-  return { baseAmountCents: Number(converted), fxRateId: rate.id };
+  // The arithmetic above is BigInt, but the column is mapped as a JS number,
+  // so the result has to land inside the safe-integer range or the ledger
+  // silently records a figure nobody chose. assertAmountCents guards what goes
+  // in; this guards what conversion made of it.
+  const baseAmountCents = Number(converted);
+  if (!Number.isSafeInteger(baseAmountCents)) {
+    throw new Error(
+      `[money] converting ${amountCents} ${currency} to ${base} overflows the ` +
+        `safe integer range (got ${converted}). The money columns are bigint ` +
+        'in Postgres but mapped as numbers; moving them to bigint mode is the ' +
+        'fix if amounts this large are real.'
+    );
+  }
+  return { baseAmountCents, fxRateId: rate.id };
 };
 
 // ============= LEDGER =============

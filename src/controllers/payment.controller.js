@@ -440,6 +440,17 @@ export const confirmBankTransferController = async (req, res, next) => {
       confirmedByUserId
     );
 
+    if (result.alreadyConfirmed) {
+      // Another caller confirmed it first, and that path returns no booking.
+      // Spreading it sent the customer a confirmation with every field
+      // undefined and left `data` missing from the response body.
+      return res.json({
+        success: true,
+        message: 'Bank transfer already confirmed',
+        alreadyConfirmed: true,
+      });
+    }
+
     // Send confirmation email to customer
     try {
       await emailService.sendPaymentConfirmation({

@@ -26,17 +26,18 @@ export const paymentStatusEnum = z.enum([
 // M-PESA VALIDATIONS
 // =====================================================
 
+// Daraja takes 01XXXXXXXX or 07XXXXXXXX locally and 2541XXXXXXXX or
+// 2547XXXXXXXX internationally. The old `0\d{9}` branch also matched
+// 0000000000, which formatPhoneNumber forwarded to the provider as
+// 254000000000. One rule, shared by both schemas that accept a number.
+const MPESA_PHONE = /^(?:254|0)[17]\d{8}$/;
+const MPESA_PHONE_MESSAGE =
+  'Phone number must be 2547XXXXXXXX, 2541XXXXXXXX, 07XXXXXXXX or 01XXXXXXXX';
+
 export const mpesaInitiateSchema = z
   .object({
     booking_id: z.string().uuid('Invalid booking ID'),
-    phone_number: z
-      .string()
-      .regex(/^254\d{9}$/, 'Phone number must be in format 254XXXXXXXXX')
-      .or(
-        z
-          .string()
-          .regex(/^0\d{9}$/, 'Phone number must be in format 07XXXXXXXX')
-      ),
+    phone_number: z.string().regex(MPESA_PHONE, MPESA_PHONE_MESSAGE),
     amount: z.number().positive('Amount must be positive').optional(),
     // ✅ Add currency validation for M-Pesa
     currency: z.string().length(3).optional(),
@@ -160,13 +161,7 @@ export const paymentInitializeSchema = z
     // the unified endpoint rejected 07XXXXXXXX while the M-Pesa-specific one
     // accepted it, so the same number worked or failed depending on route.
     // formatPhoneNumber normalises either before dispatch.
-    phone_number: z
-      .string()
-      .regex(
-        /^(254\d{9}|0\d{9})$/,
-        'Phone number must be 254XXXXXXXXX or 0XXXXXXXXX'
-      )
-      .optional(),
+    phone_number: z.string().regex(MPESA_PHONE, MPESA_PHONE_MESSAGE).optional(),
 
     // Paystack specific
     email: z.string().email().optional(),

@@ -329,11 +329,21 @@ export const getFile = async (req, res) => {
     logger.error(`[${requestId}] Get file error: ${error.message}`, {
       error: error.stack,
     });
-    // Fixed message: this catch answers 404 for any failure, so echoing the
-    // exception put database and provider internals behind a not-found.
-    res.status(404).json({
+    // getFileById rethrows database and cache failures through here too, and
+    // answering 404 for those told the caller the file did not exist when it
+    // may well have.
+    if (error.message === 'File not found') {
+      return res.status(404).json({
+        success: false,
+        error: 'File not found',
+      });
+    }
+
+    // Fixed message either way: echoing the exception would put database and
+    // provider internals into the response.
+    res.status(500).json({
       success: false,
-      error: 'File not found',
+      error: 'Failed to retrieve file',
     });
   }
 };
