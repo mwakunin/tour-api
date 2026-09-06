@@ -77,10 +77,18 @@ export const searchToursController = async (req, res, next) => {
   }
 };
 
+// Number.parseInt stops at the first character it cannot read, so '10abc'
+// and '6.5' both parsed as valid limits and silently changed the query. The
+// whole value has to be an integer.
+const parseLimit = (raw, fallback) => {
+  const value = raw ?? fallback;
+  return /^\d+$/.test(String(value).trim()) ? Number(value) : NaN;
+};
+
 export const getFeaturedToursController = async (req, res, next) => {
   try {
     // parseInt('abc') is NaN and reached the database; clamp instead.
-    const parsedLimit = Number.parseInt(req.query.limit ?? '6', 10);
+    const parsedLimit = parseLimit(req.query.limit, '6');
     if (Number.isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
       return res.status(400).json({
         success: false,
@@ -104,7 +112,7 @@ export const getFeaturedToursController = async (req, res, next) => {
 export const getDealsController = async (req, res, next) => {
   try {
     // Same clamp as getFeaturedToursController; NaN reached the query here.
-    const parsedLimit = Number.parseInt(req.query.limit ?? '10', 10);
+    const parsedLimit = parseLimit(req.query.limit, '10');
     if (Number.isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
       return res.status(400).json({
         success: false,

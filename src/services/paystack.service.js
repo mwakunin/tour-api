@@ -239,6 +239,23 @@ export const verifyPaystackPayment = async (reference) => {
             paymentId: payment.id,
           }
         );
+
+        // Returning rather than falling through. The request that won the
+        // claim is already updating the booking and sending the confirmation,
+        // so continuing here confirmed the same booking twice and sent the
+        // customer a second payment-confirmation email for one payment.
+        return {
+          success: true,
+          message: 'Payment already processed',
+          data: {
+            reference,
+            amount: data.amount / 100,
+            currency: data.currency,
+            paid_at: data.paid_at,
+            channel: data.channel,
+            booking_id: payment.booking_id,
+          },
+        };
       }
 
       // Update booking
@@ -319,7 +336,13 @@ export const verifyPaystackPayment = async (reference) => {
             status: 'failed',
             response_data: JSON.stringify(response.data),
           })
-          .where(eq(payments.id, payment.id))
+          // Guarded the same way the success claim is. Matching on id alone,
+          // a verification that read this payment as pending could overwrite a
+          // completion another request had already committed, leaving a paid
+          // booking attached to a failed payment.
+          .where(
+            and(eq(payments.id, payment.id), eq(payments.status, 'pending'))
+          )
       );
 
       logger.error('Payment failed:', { reference, status: data.status });

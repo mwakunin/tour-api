@@ -87,11 +87,18 @@ export const invalidateCacheMiddleware = (patterns) => {
       }
     };
 
+    // Express 5 implements res.json() as `return this.send(body)`, so
+    // originalJson(data) re-enters the overridden res.send below and started a
+    // second full invalidation while the first was still in flight. One
+    // promise per response, reused by whichever wrapper runs.
+    let inFlight = null;
+    const invalidateOnce = () => (inFlight ??= invalidateCache());
+
     // Await the invalidation before the response goes out. Firing it and
     // returning immediately let a client read its own write back from a stale
     // cache, because the response could land before delPattern finished.
     res.json = function (data) {
-      invalidateCache().then(
+      invalidateOnce().then(
         () => originalJson(data),
         (error) => {
           logger.error('[Cache] Invalidation failed:', error.message);
@@ -102,7 +109,7 @@ export const invalidateCacheMiddleware = (patterns) => {
     };
 
     res.send = function (data) {
-      invalidateCache().then(
+      invalidateOnce().then(
         () => originalSend(data),
         (error) => {
           logger.error('[Cache] Invalidation failed:', error.message);

@@ -492,6 +492,22 @@ export const allocate = ({
     if (!settlement)
       throw new Error(`[money] settlement ${settlementId} not found`);
 
+    // Rechecked here, under the lock, and not left to whoever selected this
+    // obligation earlier: applySettlement picks open obligations in a separate
+    // statement, and a void committing in between leaves the accrual reversed
+    // while this allocation is still in flight.
+    //
+    // The over-allocation guard below does not catch it. outstandingCentsFor
+    // is amount_cents minus allocations and never consults status, so a voided
+    // obligation still reports its full amount outstanding — the guard passes,
+    // cash and receivable legs post against a reversed obligation, and the
+    // receivable goes negative.
+    if (obligation.status !== 'open') {
+      throw new Error(
+        `[money] obligation ${obligationId} is '${obligation.status}', not open`
+      );
+    }
+
     if (obligation.currency !== settlement.currency) {
       throw new Error(
         `[money] currency mismatch: obligation is ${obligation.currency}, ` +

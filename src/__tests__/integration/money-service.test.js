@@ -315,6 +315,42 @@ describe('money service', () => {
     expect(receivableTotal).toBe(0);
   });
 
+  it('refuses to allocate against a voided obligation', async () => {
+    const obligation = await receivable(100000);
+    const settlement = await cashIn(100000);
+
+    await asTenant(() => money.voidObligation(obligation.id));
+
+    // The over-allocation guard cannot catch this on its own:
+    // outstandingCentsFor is amount_cents minus allocations and never reads
+    // status, so a voided obligation still reports its full amount as
+    // outstanding. allocate has to recheck status under its own lock.
+    const stillOutstanding = await asTenant(() =>
+      withTenantDb((tx) => money.outstandingCentsFor(tx, obligation.id))
+    );
+    expect(stillOutstanding).toBe(100000);
+
+    await expect(
+      asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: settlement.id,
+          amountCents: 100000,
+        })
+      )
+    ).rejects.toThrow(/not open/);
+
+    // The void reversed the accrual to zero. Had the allocation gone through
+    // it would have credited the receivable again and driven it negative.
+    const legs = await asTenant(() =>
+      withTenantDb((tx) => tx.select().from(ledger_entries))
+    );
+    const receivableTotal = legs
+      .filter((l) => l.account === 'accounts_receivable')
+      .reduce((sum, l) => sum + l.amount_cents, 0);
+    expect(receivableTotal).toBe(0);
+  });
+
   it('reverses only the unsettled part, leaving real money alone', async () => {
     const obligation = await receivable(100000);
     const settlement = await cashIn(40000);

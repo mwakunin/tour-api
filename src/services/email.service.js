@@ -7,6 +7,14 @@ import { bookings } from '#models/booking.model.js';
 import { tenants } from '#models/tenant.model.js';
 import { and, eq, gte, lt } from 'drizzle-orm';
 
+// Subject lines are not HTML, so escaping them corrupts what the recipient
+// reads -- "R&D" arrives as "R&amp;D". Header injection is the real risk here,
+// and that is CR/LF, not markup.
+const sanitizeSubject = (str) =>
+  String(str ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .trim();
+
 const escapeHtml = (str) =>
   String(str ?? '')
     .replace(/&/g, '&amp;')
@@ -368,7 +376,7 @@ class EmailService {
         from: this.fromEmail,
         to: [process.env.CONTACT_EMAIL || 'info@footlooseadventures.co.ke'],
         replyTo: email,
-        subject: `New Contact Form Submission from ${escapeHtml(name)}`,
+        subject: `New Contact Form Submission from ${sanitizeSubject(name)}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2>New Contact Form Submission</h2>
@@ -403,7 +411,7 @@ class EmailService {
         from: this.fromEmail,
         to: [process.env.CONTACT_EMAIL || 'info@footlooseadventures.co.ke'],
         replyTo: inquiry.email,
-        subject: `Tour Inquiry: ${escapeHtml(inquiry.subject)}`,
+        subject: `Tour Inquiry: ${sanitizeSubject(inquiry.subject)}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #ff5722;">New Tour Inquiry</h2>

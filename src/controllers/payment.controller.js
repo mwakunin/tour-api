@@ -77,6 +77,22 @@ export const initiatePayment = async (req, res, next) => {
     // that way — previously a schema default of 'KES' hid the mismatch and a
     // USD booking was initialised in the wrong currency.
     const effectiveCurrency = validatedData.currency || booking.currency;
+
+    // A supplied currency may only restate the booking's own. The amount sent
+    // to the provider is booking.total_price unconverted, so accepting the
+    // other supported currency re-denominates the charge — and verification
+    // compares the currency against the payment record rather than the
+    // booking, so the mismatch is never caught downstream.
+    if (
+      validatedData.currency &&
+      String(validatedData.currency).toUpperCase() !==
+        String(booking.currency).toUpperCase()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: `This booking is priced in ${booking.currency} and can only be paid in ${booking.currency}`,
+      });
+    }
     if (
       validatedData.payment_method === 'mpesa' &&
       String(effectiveCurrency).toUpperCase() !== 'KES'
