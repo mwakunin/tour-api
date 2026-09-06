@@ -141,13 +141,25 @@ export const bookingsRelations = relations(bookings, ({ one }) => ({
  * Example: FA-2024-001234
  */
 
-export const generateBookingReferenceSimple = () => {
-  const prefix = process.env.BOOKING_REF_PREFIX || 'FA';
+// booking_reference is varchar(20) and the format costs 14 characters after
+// the prefix (`-YYYY-` plus six timestamp digits and two random), so anything
+// longer than six would overflow the column. tenants.booking_ref_prefix allows
+// eight, hence the clamp rather than trusting the caller.
+const MAX_PREFIX_LENGTH = 6;
+
+/**
+ * @param {string} [prefix] the operator's prefix, from
+ *   tenants.booking_ref_prefix. Falls back to the env var and then 'FA' so
+ *   callers without a tenant context still work.
+ */
+export const generateBookingReferenceSimple = (prefix) => {
+  const raw = prefix || process.env.BOOKING_REF_PREFIX || 'FA';
+  const safePrefix = String(raw).slice(0, MAX_PREFIX_LENGTH);
   const year = new Date().getFullYear();
   const timestamp = Date.now().toString().slice(-6);
   const random = Math.floor(Math.random() * 100)
     .toString()
     .padStart(2, '0');
 
-  return `${prefix}-${year}-${timestamp}${random}`;
+  return `${safePrefix}-${year}-${timestamp}${random}`;
 };

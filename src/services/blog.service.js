@@ -2,7 +2,7 @@
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { blogPosts, blogCategories } from '#models/blog.model.js';
 import { user } from '#models/user.model.js';
-import { eq, desc, asc, like, and, or, sql } from 'drizzle-orm';
+import { eq, desc, asc, and, or, sql, ilike } from 'drizzle-orm';
 import logger from '#config/logger.js';
 import { cache } from '#utils/cache.js';
 import { CacheKeys } from '#utils/cacheKeys.js';
@@ -95,9 +95,9 @@ const fetchBlogPosts = async (filters) => {
   if (search) {
     conditions.push(
       or(
-        like(blogPosts.title, `%${search}%`),
-        like(blogPosts.excerpt, `%${search}%`),
-        like(blogPosts.content, `%${search}%`)
+        ilike(blogPosts.title, `%${search}%`),
+        ilike(blogPosts.excerpt, `%${search}%`),
+        ilike(blogPosts.content, `%${search}%`)
       )
     );
   }

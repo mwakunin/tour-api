@@ -4,18 +4,16 @@ setDefaultResultOrder('ipv4first');
 
 import '#config/loadEnv.js';
 
-
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import logger from './logger.js';
 import { withRetry } from '#utils/dbRetry.js';
 import * as schema from '#models/schema.js';
 
-
 // Use DOCKER_DATABASE_URL inside Docker, fallback to DATABASE_URL for host
 const isDocker = process.env.IS_DOCKER === 'true';
-const connectionUrl = isDocker 
-  ? process.env.DOCKER_DATABASE_URL 
+const connectionUrl = isDocker
+  ? process.env.DOCKER_DATABASE_URL || process.env.DATABASE_URL
   : process.env.DATABASE_URL;
 
 // Validate required environment variables

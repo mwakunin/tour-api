@@ -109,13 +109,18 @@ export const initiateSTKPush = async ({
     const formattedPhone = formatPhoneNumber(phoneNumber);
 
     // Create payment record
+    // Daraja only accepts whole shillings, so this is the figure the customer
+    // is actually charged. Persist that same value rather than the unrounded
+    // input — otherwise the settlement records an amount that never moved.
+    const chargedAmount = Math.round(parseFloat(amount));
+
     const [payment] = await withTenantDb((tx) =>
       tx
         .insert(payments)
         .values({
           tenant_id: currentTenantId(),
           booking_id: bookingId,
-          amount: amount.toString(),
+          amount: chargedAmount.toString(),
           currency: 'KES',
           payment_method: 'mpesa',
           mpesa_phone_number: formattedPhone,
@@ -130,7 +135,7 @@ export const initiateSTKPush = async ({
       Password: password,
       Timestamp: timestamp,
       TransactionType: mpesaConfig.transactionType,
-      Amount: Math.round(parseFloat(amount)), // M-Pesa requires integer
+      Amount: chargedAmount, // M-Pesa requires whole shillings
       PartyA: formattedPhone, // Customer phone
       PartyB: mpesaConfig.shortcode, // Your Till Number
       PhoneNumber: formattedPhone,

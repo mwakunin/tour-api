@@ -224,10 +224,13 @@ class Cache {
 
       return { data: result, cached: false };
     } catch (error) {
+      // Deliberately NOT re-running fn(). If fn() itself threw, calling it
+      // again executes the underlying work twice, which in this codebase can
+      // mean a second database write or a second provider call. Cache failures
+      // are absorbed where they happen (see the set path above); an error that
+      // reaches here belongs to the caller.
       logger.error(`[Cache] Wrap error for ${key}:`, error.message);
-      // On error, just execute the function without caching
-      const result = await fn();
-      return { data: result, cached: false };
+      throw error;
     }
   }
 

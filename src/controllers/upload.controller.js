@@ -289,9 +289,13 @@ export const deleteFile = async (req, res) => {
       });
     }
 
+    // Generic for unexpected failures: these messages come from ImageKit and
+    // the database and carry provider internals and query text. The
+    // allowlisted cases above (File not found and friends) are written for the
+    // client and still pass through. Full detail stays in the logs.
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: 'Upload operation failed',
     });
   }
 };
@@ -324,9 +328,11 @@ export const getFile = async (req, res) => {
     logger.error(`[${requestId}] Get file error: ${error.message}`, {
       error: error.stack,
     });
+    // Fixed message: this catch answers 404 for any failure, so echoing the
+    // exception put database and provider internals behind a not-found.
     res.status(404).json({
       success: false,
-      error: error.message,
+      error: 'File not found',
     });
   }
 };
@@ -399,9 +405,13 @@ export const getOptimizedImage = async (req, res) => {
     logger.error(`[${requestId}] Get optimized image error: ${error.message}`, {
       error: error.stack,
     });
+    // Generic for unexpected failures: these messages come from ImageKit and
+    // the database and carry provider internals and query text. The
+    // allowlisted cases above (File not found and friends) are written for the
+    // client and still pass through. Full detail stays in the logs.
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: 'Upload operation failed',
     });
   }
 };
@@ -446,9 +456,13 @@ export const getResponsiveImages = async (req, res) => {
       `[${requestId}] Get responsive images error: ${error.message}`,
       { error: error.stack }
     );
+    // Generic for unexpected failures: these messages come from ImageKit and
+    // the database and carry provider internals and query text. The
+    // allowlisted cases above (File not found and friends) are written for the
+    // client and still pass through. Full detail stays in the logs.
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: 'Upload operation failed',
     });
   }
 };
@@ -476,7 +490,10 @@ export const listFilesController = async (req, res) => {
     // Clamped rather than trusted: an unbounded limit would pull the whole
     // table into memory and serialize it.
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50));
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(req.query.limit, 10) || 50)
+    );
 
     const { files: results, total } = await listFiles({
       search,
@@ -500,9 +517,13 @@ export const listFilesController = async (req, res) => {
     logger.error(`[${requestId}] List files error: ${error.message}`, {
       error: error.stack,
     });
+    // Generic for unexpected failures: these messages come from ImageKit and
+    // the database and carry provider internals and query text. The
+    // allowlisted cases above (File not found and friends) are written for the
+    // client and still pass through. Full detail stays in the logs.
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: 'Upload operation failed',
     });
   }
 };
@@ -541,9 +562,13 @@ export const getFilesByFolderController = async (req, res) => {
     logger.error(`[${requestId}] Get files by folder error: ${error.message}`, {
       error: error.stack,
     });
+    // Generic for unexpected failures: these messages come from ImageKit and
+    // the database and carry provider internals and query text. The
+    // allowlisted cases above (File not found and friends) are written for the
+    // client and still pass through. Full detail stays in the logs.
     res.status(500).json({
       success: false,
-      error: error.message,
+      error: 'Upload operation failed',
     });
   }
 };

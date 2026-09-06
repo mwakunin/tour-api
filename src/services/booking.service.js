@@ -1,6 +1,7 @@
 // src/services/booking.service.js
 import { eq, and, or, gte, lte, desc, asc, sql } from 'drizzle-orm';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
+import { tenants } from '#models/tenant.model.js';
 import {
   raiseBookingReceivable,
   voidBookingReceivables,
@@ -133,7 +134,16 @@ export const createBooking = async (data) => {
     const totalPrice = pricePerPerson * validated.group_size;
 
     // Generate booking reference
-    const bookingReference = generateBookingReferenceSimple();
+    // The operator's own prefix, not a deployment-wide env var — branding is
+    // tenant configuration. Falls back inside the generator if unset.
+    const [tenant] = await withTenantDb((tx) =>
+      tx
+        .select({ prefix: tenants.booking_ref_prefix })
+        .from(tenants)
+        .where(eq(tenants.id, currentTenantId()))
+        .limit(1)
+    );
+    const bookingReference = generateBookingReferenceSimple(tenant?.prefix);
 
     // Create booking
     let booking;

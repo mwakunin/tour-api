@@ -4,7 +4,7 @@ import logger from '#config/logger.js';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { payments } from '#models/payment.model.js';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { emailService } from './email.service.js';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
@@ -401,12 +401,37 @@ export async function verifyPesapalPayment(orderTrackingId) {
       }
     }
 
-    if (isCompleted && payment.status !== 'completed') {
-      await handleSuccessfulPayment(
-        payment.booking_id,
-        orderTrackingId,
-        response.data
+    // The status read above happened earlier in this request, so it is stale
+    // by the time we act on it: two concurrent IPNs for one payment both saw
+    // 'pending' and both settled. Claim the transition with a conditional
+    // UPDATE instead — only the caller whose UPDATE actually changes a row
+    // goes on to settle.
+    if (isCompleted) {
+      // Claimed by moving straight to 'completed' — the status enum is
+      // pending/completed/failed, so there is no intermediate state to park in
+      // and adding one would be a migration for a lock.
+      const claimed = await withTenantDb((tx) =>
+        tx
+          .update(payments)
+          .set({ status: 'completed', completed_at: new Date() })
+          .where(
+            and(eq(payments.id, payment.id), ne(payments.status, 'completed'))
+          )
+          .returning({ id: payments.id })
       );
+
+      if (claimed.length > 0) {
+        await handleSuccessfulPayment(
+          payment.booking_id,
+          orderTrackingId,
+          response.data
+        );
+      } else {
+        logger.info('Pesapal completion already claimed, skipping', {
+          orderTrackingId,
+          paymentId: payment.id,
+        });
+      }
     } else if (isFailed && payment.status !== 'failed') {
       await handleFailedPayment(payment.booking_id, orderTrackingId);
     }

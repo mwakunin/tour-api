@@ -5,7 +5,7 @@ import logger from '#config/logger.js';
 // here, so this is not a back door, just the right pool.
 import { appDb } from '#config/appDatabase.js';
 import { user } from '#models/user.model.js';
-import { eq, or, ilike } from 'drizzle-orm';
+import { and, eq, or, ilike } from 'drizzle-orm';
 
 export const getAllUsers = async (filters = {}) => {
   try {
@@ -23,17 +23,24 @@ export const getAllUsers = async (filters = {}) => {
       })
       .from(user);
 
-    // Apply search filter if provided (case-insensitive)
+    // Collected and applied once: a second .where() REPLACES the first in
+    // Drizzle rather than adding to it, so searching and filtering by role
+    // together silently dropped the search.
+    const conditions = [];
+
     if (search && search.trim() !== '') {
       const searchTerm = `%${search.trim()}%`;
-      query = query.where(
+      conditions.push(
         or(ilike(user.name, searchTerm), ilike(user.email, searchTerm))
       );
     }
 
-    // Apply role filter if provided
     if (role && role !== 'all') {
-      query = query.where(eq(user.role, role));
+      conditions.push(eq(user.role, role));
+    }
+
+    if (conditions.length > 0) {
+      query = query.where(and(...conditions));
     }
 
     // Apply pagination
@@ -41,12 +48,8 @@ export const getAllUsers = async (filters = {}) => {
 
     const result = await query;
 
-    logger.info(`Found ${result.length} users with filters:`, {
-      search,
-      role,
-      limit,
-      offset,
-    });
+    // No `search` here: it is user-supplied and routinely an email address.
+    logger.info(`Found ${result.length} users`, { role, limit, offset });
 
     return result;
   } catch (e) {
@@ -117,7 +120,7 @@ export const updateUser = async (id, updates) => {
         updatedAt: user.updatedAt,
       });
 
-    logger.info(`User ${updatedUser.email} updated successfully`);
+    logger.info('User updated successfully', { userId: updatedUser.id });
     return updatedUser;
   } catch (e) {
     logger.error(`Error updating user ${id}:`, e);
@@ -140,7 +143,7 @@ export const deleteUser = async (id) => {
         role: user.role,
       });
 
-    logger.info(`User ${deletedUser.email} deleted successfully`);
+    logger.info('User deleted successfully', { userId: deletedUser.id });
     return deletedUser;
   } catch (e) {
     logger.error(`Error deleting user ${id}:`, e);

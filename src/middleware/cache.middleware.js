@@ -80,15 +80,29 @@ export const invalidateCacheMiddleware = (patterns) => {
       }
     };
 
-    // Override response methods
+    // Await the invalidation before the response goes out. Firing it and
+    // returning immediately let a client read its own write back from a stale
+    // cache, because the response could land before delPattern finished.
     res.json = function (data) {
-      invalidateCache();
-      return originalJson(data);
+      invalidateCache().then(
+        () => originalJson(data),
+        (error) => {
+          logger.error('[Cache] Invalidation failed:', error.message);
+          originalJson(data);
+        }
+      );
+      return res;
     };
 
     res.send = function (data) {
-      invalidateCache();
-      return originalSend(data);
+      invalidateCache().then(
+        () => originalSend(data),
+        (error) => {
+          logger.error('[Cache] Invalidation failed:', error.message);
+          originalSend(data);
+        }
+      );
+      return res;
     };
 
     next();
