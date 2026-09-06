@@ -25,6 +25,13 @@ export const cacheMiddleware = (keyPrefix, ttl = 3600, keyGenerator = null) => {
 
       if (cached) {
         logger.debug(`[Cache Middleware] Hit: ${cacheKey}`);
+        // Arrays must be returned as arrays. `{...cached}` turns [a, b] into
+        // {0: a, 1: b, cached: true}, so a list endpoint changed JSON type
+        // depending on whether the cache was warm. The marker is only
+        // meaningful on an object response anyway.
+        if (Array.isArray(cached)) {
+          return res.json(cached);
+        }
         return res.json({
           ...cached,
           cached: true,

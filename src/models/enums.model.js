@@ -46,6 +46,14 @@ export const paymentTransactionStatusEnum = pgEnum(
 );
 
 // ============= TENANCY =============
+// Daraja requires the transaction type to match the shortcode kind: a Paybill
+// takes CustomerPayBillOnline, a Till takes CustomerBuyGoodsOnline, and the
+// wrong one fails the STK push. It is therefore per-operator, not per-deploy.
+export const mpesaShortcodeTypeEnum = pgEnum('mpesa_shortcode_type', [
+  'paybill',
+  'till',
+]);
+
 export const tenantStatusEnum = pgEnum('tenant_status', [
   'active',
   'suspended',

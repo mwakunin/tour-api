@@ -14,6 +14,10 @@ import { cache } from '#utils/cache.js';
 import { CacheKeys } from '#utils/cacheKeys.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
 
+// Paystack is a third party that can hang. Without a bound, a slow
+// response holds this request and its connection open indefinitely.
+const PAYSTACK_TIMEOUT_MS = Number(process.env.PAYSTACK_TIMEOUT_MS || 15000);
+
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
 
 /**
@@ -81,6 +85,7 @@ export const initializePaystackPayment = async ({
           Authorization: `Bearer ${paystackConfig.secretKey}`,
           'Content-Type': 'application/json',
         },
+        timeout: PAYSTACK_TIMEOUT_MS,
       }
     );
 
@@ -171,6 +176,7 @@ export const verifyPaystackPayment = async (reference) => {
         headers: {
           Authorization: `Bearer ${paystackConfig.secretKey}`,
         },
+        timeout: PAYSTACK_TIMEOUT_MS,
       }
     );
     const { status, data } = response.data;
@@ -379,6 +385,7 @@ export const getSupportedBanks = async () => {
       headers: {
         Authorization: `Bearer ${paystackConfig.secretKey}`,
       },
+      timeout: PAYSTACK_TIMEOUT_MS,
     });
 
     return response.data.data;

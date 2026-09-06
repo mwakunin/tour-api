@@ -44,18 +44,11 @@ export const getOptimizedImageSchema = z.object({
     id: z.string().uuid('Invalid file ID'),
   }),
   query: z.object({
-    width: z
-      .string()
-      .optional()
-      .transform((val) => parseInt(val || '800')),
-    height: z
-      .string()
-      .optional()
-      .transform((val) => parseInt(val || '600')),
-    quality: z
-      .string()
-      .optional()
-      .transform((val) => parseInt(val || '80')),
+    // Coerced then validated, rather than parseInt'd and trusted: NaN,
+    // negatives and absurd dimensions all reached ImageKit before.
+    width: z.coerce.number().int().positive().max(5000).default(800),
+    height: z.coerce.number().int().positive().max(5000).default(600),
+    quality: z.coerce.number().int().min(1).max(100).default(80),
     format: z
       .enum(['auto', 'webp', 'jpg', 'png', 'avif'])
       .optional()

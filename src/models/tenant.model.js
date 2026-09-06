@@ -16,7 +16,11 @@ import {
   timestamp,
   index,
 } from 'drizzle-orm/pg-core';
-import { currencyEnum, tenantStatusEnum } from './enums.model.js';
+import {
+  currencyEnum,
+  tenantStatusEnum,
+  mpesaShortcodeTypeEnum,
+} from './enums.model.js';
 
 export const tenants = pgTable(
   'tenants',
@@ -42,6 +46,11 @@ export const tenants = pgTable(
     // that is what keeps this product outside CBK payment-service licensing.
     // Encrypted at rest; never select these into a response.
     mpesa_shortcode: text('mpesa_shortcode'),
+    // Selects the Daraja transaction type; see the enum for why it is per
+    // tenant rather than a deployment constant.
+    mpesa_shortcode_type: mpesaShortcodeTypeEnum('mpesa_shortcode_type')
+      .default('paybill')
+      .notNull(),
     mpesa_credentials: text('mpesa_credentials'),
     pesapal_credentials: text('pesapal_credentials'),
 

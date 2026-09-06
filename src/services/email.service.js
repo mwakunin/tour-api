@@ -372,7 +372,7 @@ class EmailService {
         from: this.fromEmail,
         to: [process.env.CONTACT_EMAIL || 'info@footlooseadventures.co.ke'],
         replyTo: inquiry.email,
-        subject: `Tour Inquiry: ${inquiry.subject}`,
+        subject: `Tour Inquiry: ${escapeHtml(inquiry.subject)}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #ff5722;">New Tour Inquiry</h2>
@@ -380,16 +380,16 @@ class EmailService {
             <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
               <h3 style="margin-top: 0;">Contact Information</h3>
               <p><strong>Name:</strong> ${escapeHtml(inquiry.name)}</p>
-              <p><strong>Email:</strong> ${inquiry.email}</p>
-              <p><strong>Country:</strong> ${inquiry.country}</p>
-              <p><strong>Contact:</strong> ${inquiry.contact}</p>
+              <p><strong>Email:</strong> ${escapeHtml(inquiry.email)}</p>
+              <p><strong>Country:</strong> ${escapeHtml(inquiry.country)}</p>
+              <p><strong>Contact:</strong> ${escapeHtml(inquiry.contact)}</p>
             </div>
 
             ${
               inquiry.tour_title
                 ? `
               <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin: 20px 0;">
-                <p><strong>Tour of Interest:</strong> ${inquiry.tour_title}</p>
+                <p><strong>Tour of Interest:</strong> ${escapeHtml(inquiry.tour_title)}</p>
                 ${inquiry.tour_id ? `<p><strong>Tour ID:</strong> ${inquiry.tour_id}</p>` : ''}
               </div>
             `
@@ -404,8 +404,8 @@ class EmailService {
             </div>
 
             <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
-              <h3 style="margin-top: 0;">${inquiry.subject}</h3>
-              <p style="white-space: pre-wrap;">${inquiry.message}</p>
+              <h3 style="margin-top: 0;">${escapeHtml(inquiry.subject)}</h3>
+              <p style="white-space: pre-wrap;">${escapeHtml(inquiry.message)}</p>
             </div>
 
             <p style="color: #666; font-size: 12px;">
@@ -445,9 +445,9 @@ class EmailService {
             
             <div style="background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0;">
               <h3 style="margin-top: 0;">Your Inquiry Details</h3>
-              <p><strong>Subject:</strong> ${inquiry.subject}</p>
+              <p><strong>Subject:</strong> ${escapeHtml(inquiry.subject)}</p>
               <p><strong>Group Size:</strong> ${inquiry.adults} Adults${inquiry.children > 0 ? `, ${inquiry.children} Children` : ''}</p>
-              ${inquiry.tour_title ? `<p><strong>Tour:</strong> ${inquiry.tour_title}</p>` : ''}
+              ${inquiry.tour_title ? `<p><strong>Tour:</strong> ${escapeHtml(inquiry.tour_title)}</p>` : ''}
             </div>
 
             <p>Best regards,<br>
@@ -499,7 +499,7 @@ class EmailService {
                   <p><strong>Reference:</strong> ${booking.booking_reference}</p>
                   <p><strong>Tour:</strong> ${booking.tour?.title || 'N/A'}</p>
                   <p><strong>Customer:</strong> ${escapeHtml(booking.customer_name)}</p>
-                  <p><strong>Email:</strong> ${booking.customer_email}</p>
+                  <p><strong>Email:</strong> ${escapeHtml(booking.customer_email)}</p>
                   <p><strong>Phone Number:</strong> ${escapeHtml(booking.customer_phone)}</p>
                   <p><strong>Group Size:</strong> ${groupSize} ${groupSize === 1 ? 'person' : 'people'}</p>
                   <p><strong>Total Amount:</strong> ${booking.currency} ${parseFloat(booking.total_price).toFixed(2)}</p>

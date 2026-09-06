@@ -37,6 +37,23 @@ const CASH_ACCOUNT = {
   cash: 'cash_other',
 };
 
+/**
+ * Money must be a positive, whole, representable number of cents.
+ *
+ * The database CHECKs catch negatives and zero, but a fractional or
+ * unsafe-integer amount would be stored as-is and then silently mangled by the
+ * BigInt conversion in toBaseCents. Rejecting at the boundary keeps the ledger
+ * from recording an amount nobody chose.
+ */
+const assertAmountCents = (amountCents, label) => {
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
+    throw new Error(
+      `[money] ${label} must be a positive safe integer number of cents, ` +
+        `received ${JSON.stringify(amountCents)}`
+    );
+  }
+};
+
 // ============= CURRENCY =============
 
 const baseCurrencyOf = async (tx, tenantId) => {
@@ -188,6 +205,7 @@ export const createObligation = ({
   description = null,
 }) =>
   withTenantDb(async (tx) => {
+    assertAmountCents(amountCents, 'obligation amount');
     const tenantId = currentTenantId();
     const onDate = (dueOn ?? new Date().toISOString().slice(0, 10)).toString();
 
@@ -293,6 +311,7 @@ export const recordSettlement = ({
   notes = null,
 }) =>
   withTenantDb(async (tx) => {
+    assertAmountCents(amountCents, 'settlement amount');
     const [settlement] = await tx
       .insert(settlements)
       .values({
@@ -349,6 +368,8 @@ export const allocate = ({
   note = null,
 }) =>
   withTenantDb(async (tx) => {
+    assertAmountCents(amountCents, 'allocation amount');
+
     // FOR UPDATE on both sides. The over-allocation checks below are
     // read-then-write, so without locking two concurrent callbacks for the
     // same booking both read the same outstanding amount, both pass, and both

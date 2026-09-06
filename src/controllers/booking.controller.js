@@ -429,6 +429,16 @@ export const updateBookingController = async (req, res, next) => {
         .returning()
     );
 
+    if (!updated) {
+      // The UPDATE matched nothing — the booking does not exist, or belongs to
+      // another tenant and RLS hid it. Reading updated.id here threw a
+      // TypeError, surfacing as a 500 instead of a 404.
+      return res.status(404).json({
+        success: false,
+        error: 'Booking not found',
+      });
+    }
+
     // Invalidate cache
     await invalidateBooking(
       updated.id,

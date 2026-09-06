@@ -64,7 +64,7 @@ export const requireRole = (allowedRoles) => {
 
     if (!rolesArray.includes(userRole)) {
       logger.warn(
-        `[Auth] Access denied: User ${req.user.email} has role '${userRole}', required: [${rolesArray.join(', ')}]`
+        `[Auth] Access denied: user ${req.user.id} has role '${userRole}', required: [${rolesArray.join(', ')}]`
       );
       return res.status(403).json({
         error: 'Access denied',
@@ -93,9 +93,7 @@ export const requireOwnerOrAdmin = (getUserId) => {
     const isAdmin = req.user.role === 'admin';
 
     if (!isOwner && !isAdmin) {
-      logger.warn(
-        `[Auth] Owner/Admin access denied for user ${req.user.email}`
-      );
+      logger.warn(`[Auth] Owner/Admin access denied for user ${req.user.id}`);
       return res.status(403).json({
         error: 'Access denied',
         message:

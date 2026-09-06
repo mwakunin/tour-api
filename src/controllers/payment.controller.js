@@ -224,9 +224,21 @@ export const mpesaCallback = async (req, res) => {
     await handleMpesaCallback(req.body);
     res.json({ ResultCode: 0, ResultDesc: 'Success' });
   } catch (error) {
-    logger.error('Error in M-Pesa callback:', error);
-    // ✅ Still return success to M-Pesa to prevent retries
-    res.json({ ResultCode: 0, ResultDesc: 'Success' });
+    // Do NOT acknowledge with ResultCode 0 here. Acknowledging tells Safaricom
+    // the callback was handled and it will not send it again — so a database
+    // failure mid-processing silently loses a payment the customer has already
+    // made, with nothing left to reconcile from. A non-zero result makes
+    // Safaricom retry, which is the behaviour we want for a transient fault.
+    //
+    // The earlier branches still acknowledge deliberately: those are callbacks
+    // we have understood and decided need no further delivery.
+    logger.error('Error in M-Pesa callback, asking Safaricom to retry:', {
+      error: error.message,
+    });
+    res.status(500).json({
+      ResultCode: 1,
+      ResultDesc: 'Callback processing failed, please retry',
+    });
   }
 };
 

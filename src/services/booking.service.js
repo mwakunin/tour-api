@@ -727,15 +727,14 @@ export const checkTourAvailability = async (
         where: and(
           eq(bookings.tour_id, tourId),
           or(eq(bookings.status, 'confirmed'), eq(bookings.status, 'pending')),
-          or(
-            and(
-              gte(bookings.start_date, startDate),
-              lte(bookings.start_date, endDate)
-            ),
-            and(
-              gte(bookings.end_date, startDate),
-              lte(bookings.end_date, endDate)
-            )
+          // Standard interval overlap: starts on or before the window ends,
+          // and ends on or after it begins. The previous endpoint-in-range
+          // test missed bookings that span the whole window — a ten-day
+          // booking straddling a three-day query counted as zero booked
+          // spots, so the tour could be overbooked.
+          and(
+            lte(bookings.start_date, endDate),
+            gte(bookings.end_date, startDate)
           )
         ),
       })

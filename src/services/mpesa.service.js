@@ -8,6 +8,7 @@ import logger from '#config/logger.js';
 import { emailService } from './email.service.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
+import { tenants } from '#models/tenant.model.js';
 
 // Logged once per process so "are we hitting live Safaricom?" is answerable
 // from the logs rather than inferred from a URL in an error message.
@@ -110,6 +111,23 @@ export const initiateSTKPush = async ({
     const formattedPhone = formatPhoneNumber(phoneNumber);
 
     // Create payment record
+    // Daraja requires the transaction type to match the shortcode kind, and
+    // that is a property of the operator, not the deployment: a Paybill takes
+    // CustomerPayBillOnline, a Till takes CustomerBuyGoodsOnline, and the
+    // wrong one fails the push. Falls back to the configured default for
+    // callers with no tenant context.
+    const [tenantRow] = await withTenantDb((tx) =>
+      tx
+        .select({ shortcodeType: tenants.mpesa_shortcode_type })
+        .from(tenants)
+        .where(eq(tenants.id, currentTenantId()))
+        .limit(1)
+    );
+    const transactionType =
+      tenantRow?.shortcodeType === 'till'
+        ? 'CustomerBuyGoodsOnline'
+        : mpesaConfig.transactionType;
+
     // Daraja only accepts whole shillings, so this is the figure the customer
     // is actually charged. Persist that same value rather than the unrounded
     // input — otherwise the settlement records an amount that never moved.
@@ -135,7 +153,7 @@ export const initiateSTKPush = async ({
       BusinessShortCode: mpesaConfig.shortcode,
       Password: password,
       Timestamp: timestamp,
-      TransactionType: mpesaConfig.transactionType,
+      TransactionType: transactionType,
       Amount: chargedAmount, // M-Pesa requires whole shillings
       PartyA: formattedPhone, // Customer phone
       PartyB: mpesaConfig.shortcode, // Your Till Number
