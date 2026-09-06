@@ -43,13 +43,12 @@ export const withRetry = async (fn, maxRetries = 3) => {
         throw error;
       }
 
-      // Don't retry on certain errors
-      if (
-        !TRANSIENT_CODES.has(error.code) &&
-        (error.message?.includes('invalid') ||
-          error.message?.includes('not found') ||
-          error.code === '23505') // Unique constraint violation
-      ) {
+      // Retry ONLY what is known to be transient. The previous condition threw
+      // for non-transient errors that also matched a message or code pattern,
+      // which meant every other non-transient failure — check violations,
+      // foreign-key violations, ordinary bugs — fell through and was retried.
+      // Retrying a non-idempotent write is how one payment becomes several.
+      if (!TRANSIENT_CODES.has(error.code)) {
         throw error;
       }
 

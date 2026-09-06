@@ -294,6 +294,61 @@ describe('money service', () => {
     expect(balanceLeft).toBe(220000); // 294000 - the remaining 74000
   });
 
+  it('reverses the unsettled accrual when an obligation is voided', async () => {
+    const obligation = await receivable(420000);
+
+    await asTenant(() => money.voidObligation(obligation.id));
+
+    const legs = await asTenant(() =>
+      withTenantDb((tx) => tx.select().from(ledger_entries))
+    );
+
+    // Accrual plus its reversal: revenue nets to zero for a trip that will
+    // not happen, rather than staying credited.
+    const revenue = legs
+      .filter((l) => l.account === 'revenue')
+      .reduce((sum, l) => sum + l.amount_cents, 0);
+    const receivableTotal = legs
+      .filter((l) => l.account === 'accounts_receivable')
+      .reduce((sum, l) => sum + l.amount_cents, 0);
+    expect(revenue).toBe(0);
+    expect(receivableTotal).toBe(0);
+  });
+
+  it('reverses only the unsettled part, leaving real money alone', async () => {
+    const obligation = await receivable(100000);
+    const settlement = await cashIn(40000);
+    await asTenant(() =>
+      money.allocate({
+        obligationId: obligation.id,
+        settlementId: settlement.id,
+        amountCents: 40000,
+      })
+    );
+
+    await asTenant(() => money.voidObligation(obligation.id));
+
+    const legs = await asTenant(() =>
+      withTenantDb((tx) => tx.select().from(ledger_entries))
+    );
+    // 100,000 accrued, 40,000 genuinely received, so only 60,000 is reversed.
+    const revenue = legs
+      .filter((l) => l.account === 'revenue')
+      .reduce((sum, l) => sum + l.amount_cents, 0);
+    expect(revenue).toBe(-40000);
+
+    const unbalanced = await asTenant(() =>
+      withTenantDb((tx) =>
+        tx
+          .select({ group: ledger_entries.entry_group_id })
+          .from(ledger_entries)
+          .groupBy(ledger_entries.entry_group_id)
+          .having(sql`sum(${ledger_entries.base_amount_cents}) <> 0`)
+      )
+    );
+    expect(unbalanced).toHaveLength(0);
+  });
+
   it('leaves an unmatched receipt unallocated rather than forcing it', async () => {
     const settlement = await cashIn(50000);
     const made = await asTenant(() =>

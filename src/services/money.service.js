@@ -279,6 +279,102 @@ export const createObligation = ({
     return obligation;
   });
 
+/**
+ * Voids an obligation and reverses the unsettled part of its accrual.
+ *
+ * Setting the status alone left the original entry group posted, so a
+ * cancelled booking kept its receivable debited and its revenue credited —
+ * revenue stayed overstated for work that will never happen.
+ *
+ * Only the UNALLOCATED amount is reversed. Anything already settled represents
+ * money that actually moved; unwinding it here would make the ledger disagree
+ * with the bank. That balance is a refund question, handled separately.
+ */
+export const voidObligation = (obligationId) =>
+  withTenantDb(async (tx) => {
+    const [obligation] = await tx
+      .select()
+      .from(obligations)
+      .where(eq(obligations.id, obligationId))
+      .limit(1)
+      .for('update');
+
+    if (!obligation || obligation.status !== 'open') return null;
+
+    const unsettled = await outstandingCentsFor(tx, obligationId);
+
+    const [voided] = await tx
+      .update(obligations)
+      .set({ status: 'void', updated_at: new Date() })
+      .where(eq(obligations.id, obligationId))
+      .returning();
+
+    if (unsettled > 0) {
+      const onDate = (
+        obligation.due_on ?? new Date().toISOString().slice(0, 10)
+      )
+        .toString()
+        .slice(0, 10);
+      const { baseAmountCents, fxRateId } = await toBaseCents(tx, {
+        tenantId: currentTenantId(),
+        amountCents: unsettled,
+        currency: obligation.currency,
+        onDate,
+      });
+
+      const counterAccount = counterAccountFor(
+        obligation.direction,
+        obligation.kind
+      );
+
+      // Mirror image of the accrual in createObligation, for the unsettled
+      // portion only.
+      const legs =
+        obligation.direction === 'receivable'
+          ? [
+              {
+                account: 'accounts_receivable',
+                amountCents: -unsettled,
+                currency: obligation.currency,
+                baseAmountCents: -baseAmountCents,
+                fxRateId,
+              },
+              {
+                account: counterAccount,
+                amountCents: unsettled,
+                currency: obligation.currency,
+                baseAmountCents,
+                fxRateId,
+              },
+            ]
+          : [
+              {
+                account: counterAccount,
+                amountCents: -unsettled,
+                currency: obligation.currency,
+                baseAmountCents: -baseAmountCents,
+                fxRateId,
+              },
+              {
+                account: 'accounts_payable',
+                amountCents: unsettled,
+                currency: obligation.currency,
+                baseAmountCents,
+                fxRateId,
+              },
+            ];
+
+      await postLedger(tx, {
+        legs,
+        sourceType: 'obligation_void',
+        sourceId: obligationId,
+        memo: `Void of ${obligation.description ?? obligationId}`,
+      });
+    }
+
+    return voided;
+  });
+
 /** Outstanding = amount minus what has been allocated. Never stored. */
 export const outstandingCentsFor = async (tx, obligationId) => {
   const [row] = await tx

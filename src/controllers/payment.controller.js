@@ -72,6 +72,22 @@ export const initiatePayment = async (req, res, next) => {
       });
     }
 
+    // Resolved here because the schema has no booking to consult. M-Pesa
+    // settles in KES only, so a booking priced in anything else cannot be paid
+    // that way — previously a schema default of 'KES' hid the mismatch and a
+    // USD booking was initialised in the wrong currency.
+    const effectiveCurrency = validatedData.currency || booking.currency;
+    if (
+      validatedData.payment_method === 'mpesa' &&
+      String(effectiveCurrency).toUpperCase() !== 'KES'
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'M-Pesa payments are only available for Kenyan Shillings (KES)',
+      });
+    }
+
     // Initialize payment
     const result = await initializePayment({
       bookingId: booking.id,
@@ -82,7 +98,7 @@ export const initiatePayment = async (req, res, next) => {
       amount: parseFloat(booking.total_price),
       phoneNumber: validatedData.phone_number,
       email: validatedData.email || booking.customer_email,
-      currency: validatedData.currency || booking.currency,
+      currency: effectiveCurrency,
       metadata: {
         booking_reference: booking.booking_reference,
         customer_name: booking.customer_name,

@@ -154,7 +154,10 @@ const MAX_PREFIX_LENGTH = 6;
  */
 export const generateBookingReferenceSimple = (prefix) => {
   const raw = prefix || process.env.BOOKING_REF_PREFIX || 'FA';
-  const safePrefix = String(raw).slice(0, MAX_PREFIX_LENGTH);
+  // Upper-cased to match getBookingByReference, which upper-cases the lookup:
+  // a tenant configured with a lower-case prefix generated references that
+  // could never be found again.
+  const safePrefix = String(raw).slice(0, MAX_PREFIX_LENGTH).toUpperCase();
   const year = new Date().getFullYear();
   const timestamp = Date.now().toString().slice(-6);
   const random = Math.floor(Math.random() * 100)

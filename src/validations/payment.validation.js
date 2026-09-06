@@ -44,7 +44,7 @@ export const mpesaInitiateSchema = z
   .refine(
     (data) => {
       // ✅ M-Pesa only works with KES
-      if (data.currency && data.currency.toUpperCase() !== 'KES') {
+      if (data.currency && data.currency?.toUpperCase() !== 'KES') {
         return false;
       }
       return true;
@@ -173,7 +173,10 @@ export const paymentInitializeSchema = z
 
     // No `amount` here on purpose: the charge is taken from the booking, so a
     // caller cannot choose what to pay. Zod strips it if one is sent anyway.
-    currency: z.string().length(3).default('KES'),
+    // No default: the controller resolves `validatedData.currency ||
+    // booking.currency`, and defaulting here made that fallback unreachable,
+    // so a USD booking was initialised in KES.
+    currency: z.enum(['USD', 'KES']).optional(),
   })
   .refine(
     (data) => {
@@ -191,7 +194,10 @@ export const paymentInitializeSchema = z
   )
   .refine(
     (data) => {
-      if (data.payment_method === 'mpesa') {
+      if (data.payment_method === 'mpesa' && data.currency) {
+        // Only checks a currency the caller actually supplied. When omitted it
+        // is resolved from the booking, and the controller applies the same
+        // rule there — the schema has no booking to consult.
         return data.currency.toUpperCase() === 'KES';
       }
       return true;

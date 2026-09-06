@@ -153,10 +153,10 @@ export const recordBookingSettlement = async ({ payment, booking }) => {
  */
 export const voidBookingReceivables = async (bookingId) => {
   try {
-    return await withTenantDb((tx) =>
+    const open = await withTenantDb((tx) =>
       tx
-        .update(obligations)
-        .set({ status: 'void', updated_at: new Date() })
+        .select({ id: obligations.id })
+        .from(obligations)
         .where(
           and(
             eq(obligations.tenant_id, currentTenantId()),
@@ -166,8 +166,17 @@ export const voidBookingReceivables = async (bookingId) => {
             eq(obligations.status, 'open')
           )
         )
-        .returning()
     );
+
+    // Through the money layer, not a bare status update: voiding has to
+    // reverse the unsettled part of the accrual, or a cancelled booking keeps
+    // its revenue credited for a trip that will not happen.
+    const voided = [];
+    for (const row of open) {
+      const result = await money.voidObligation(row.id);
+      if (result) voided.push(result);
+    }
+    return voided;
   } catch (error) {
     logger.error('[bookingLedger] failed to void receivables', {
       bookingId,
