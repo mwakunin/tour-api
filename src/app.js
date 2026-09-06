@@ -28,8 +28,42 @@ import adminTestRoutes from '#routes/admin-test.routes.js';
 
 const app = express();
 
-// ✅ ADD THIS LINE - Trust Cloudflare proxy
-app.set('trust proxy', 1);
+// How many proxies sit in front of this process and rewrite x-forwarded-for.
+//
+// Zero by default, because the API is published directly — docker-compose.prod
+// maps 3000:3000 — so nothing upstream touches that header and whatever a
+// caller sends arrives intact. That is not cosmetic: `trust proxy` is what
+// makes req.ip read from the header, and req.ip keys Arcjet's rate limiting.
+// better-auth is worse off still, resolving its rate-limit bucket from the
+// header alone with no socket fallback, and trusting any value that carries a
+// single entry. Between them, `x-forwarded-for: <anything>` picks your own
+// throttle bucket and a fresh value per request removes the throttle.
+//
+// Set TRUSTED_PROXY_HOPS to the number of hops when an ingress that overwrites
+// the header is actually in front (Cloudflare, nginx, Vercel: normally 1).
+const TRUSTED_PROXY_HOPS = Number.parseInt(
+  process.env.TRUSTED_PROXY_HOPS ?? '0',
+  10
+);
+const trustedHops = Number.isNaN(TRUSTED_PROXY_HOPS) ? 0 : TRUSTED_PROXY_HOPS;
+
+app.set('trust proxy', trustedHops);
+
+if (!trustedHops) {
+  // With no proxy to trust, this process becomes the trust boundary: the
+  // forwarded headers are replaced with the address the connection actually
+  // came from. `trust proxy` is 0 above, so req.ip is that socket address and
+  // cannot be fed by the caller.
+  //
+  // Overwritten rather than deleted, because better-auth falls back to a
+  // single shared bucket for every caller when it cannot resolve an address —
+  // which would turn a rate-limit bypass into a rate-limit outage.
+  app.use((req, _res, next) => {
+    req.headers['x-forwarded-for'] = req.ip;
+    delete req.headers['x-vercel-forwarded-for'];
+    next();
+  });
+}
 
 // ✅ IMPORTANT: Order matters for sessions!
 app.use(cookieParser());

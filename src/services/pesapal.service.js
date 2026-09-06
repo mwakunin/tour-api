@@ -407,25 +407,44 @@ export async function verifyPesapalPayment(orderTrackingId) {
     // UPDATE instead — only the caller whose UPDATE actually changes a row
     // goes on to settle.
     if (isCompleted) {
-      // Claimed by moving straight to 'completed' — the status enum is
-      // pending/completed/failed, so there is no intermediate state to park in
-      // and adding one would be a migration for a lock.
-      const claimed = await withTenantDb((tx) =>
-        tx
+      // The claim and everything it commits the operator to — the settlement
+      // and the booking confirmation — share one transaction.
+      //
+      // Split across two, a failure after the claim was unrecoverable: the
+      // payment was already 'completed', so the next IPN's conditional claim
+      // matched no rows, logged 'already claimed', and returned. The booking
+      // stayed unconfirmed forever with the money recorded as received. The
+      // lock that stops double-processing also stopped the retry.
+      //
+      // withTenantDb reuses an ambient transaction, so the writes inside
+      // recordPesapalSuccess join this one instead of opening their own.
+      const confirmedBooking = await withTenantDb(async (tx) => {
+        // Claimed by moving straight to 'completed' — the status enum is
+        // pending/completed/failed, so there is no intermediate state to park
+        // in and adding one would be a migration for a lock.
+        const claimed = await tx
           .update(payments)
           .set({ status: 'completed', completed_at: new Date() })
           .where(
             and(eq(payments.id, payment.id), ne(payments.status, 'completed'))
           )
-          .returning({ id: payments.id })
-      );
+          .returning({ id: payments.id });
 
-      if (claimed.length > 0) {
-        await handleSuccessfulPayment(
+        if (claimed.length === 0) return null;
+
+        return recordPesapalSuccess(
           payment.booking_id,
           orderTrackingId,
           response.data
         );
+      });
+
+      if (confirmedBooking) {
+        // Only once the transaction has committed. Resend inside it would
+        // hold the payment and booking rows locked across an HTTP call, and a
+        // later rollback would leave the customer holding a confirmation for
+        // a booking the database no longer says is confirmed.
+        await notifyPesapalSuccess(confirmedBooking, orderTrackingId);
       } else {
         logger.info('Pesapal completion already claimed, skipping', {
           orderTrackingId,
@@ -483,9 +502,17 @@ export async function handlePesapalIPN(data) {
 }
 
 /**
- * Handle successful payment
+ * The durable half of a successful payment: record the provider's response,
+ * settle the money, and confirm the booking.
+ *
+ * Runs inside the caller's transaction — see verifyPesapalPayment — so a
+ * failure anywhere here takes the payment claim down with it and leaves the
+ * IPN retryable. Does no cache or email work for that reason; that is
+ * notifyPesapalSuccess, after the commit.
+ *
+ * @returns the confirmed booking
  */
-async function handleSuccessfulPayment(bookingId, trackingId, transactionData) {
+async function recordPesapalSuccess(bookingId, trackingId, transactionData) {
   try {
     const [completedPayment] = await withTenantDb((tx) =>
       tx
@@ -524,27 +551,46 @@ async function handleSuccessfulPayment(bookingId, trackingId, transactionData) {
       throw new Error('Failed to update booking');
     }
 
-    await invalidateBooking(
-      updatedBooking.id,
-      updatedBooking.user_id,
-      updatedBooking.tour_id,
-      updatedBooking.booking_reference
-    );
-
-    try {
-      await emailService.sendPaymentConfirmation({
-        ...updatedBooking,
-        payment_method: 'pesapal',
-      });
-    } catch (emailError) {
-      logger.error('Failed to send confirmation email:', emailError);
-    }
-
-    logger.info('Pesapal payment completed:', { bookingId, trackingId });
+    return updatedBooking;
   } catch (error) {
     logger.error('Error handling successful payment:', error);
     throw error;
   }
+}
+
+/**
+ * The best-effort half: cache invalidation and the customer's receipt.
+ *
+ * Deliberately after the commit and deliberately non-throwing. The money is
+ * already recorded and the booking already confirmed by the time this runs, so
+ * a stale cache entry or an undelivered email is not a reason to fail the IPN
+ * and have Pesapal redeliver a payment that is fully settled.
+ */
+async function notifyPesapalSuccess(booking, trackingId) {
+  try {
+    await invalidateBooking(
+      booking.id,
+      booking.user_id,
+      booking.tour_id,
+      booking.booking_reference
+    );
+  } catch (cacheError) {
+    logger.error('Failed to invalidate booking caches:', cacheError);
+  }
+
+  try {
+    await emailService.sendPaymentConfirmation({
+      ...booking,
+      payment_method: 'pesapal',
+    });
+  } catch (emailError) {
+    logger.error('Failed to send confirmation email:', emailError);
+  }
+
+  logger.info('Pesapal payment completed:', {
+    bookingId: booking.id,
+    trackingId,
+  });
 }
 
 /**

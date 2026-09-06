@@ -178,10 +178,15 @@ export const voidBookingReceivables = async (bookingId) => {
     }
     return voided;
   } catch (error) {
+    // Rethrown rather than swallowed. Returning [] told the caller the
+    // receivables had been dealt with when they were still open, so a
+    // cancellation answered success with the books left wrong and nothing to
+    // retry from. The caller runs this inside its own transaction, which now
+    // rolls the cancellation back with it.
     logger.error('[bookingLedger] failed to void receivables', {
       bookingId,
       error: error.message,
     });
-    return [];
+    throw error;
   }
 };

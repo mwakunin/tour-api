@@ -451,26 +451,33 @@ export const getUserBookings = async (userId, filters = {}) => {
 
 export const updateBookingStatus = async (id, status) => {
   try {
-    const [updated] = await withTenantDb((tx) =>
-      tx
+    // The status change and the void share one transaction. Split across two,
+    // the booking committed as cancelled and any failure to void left the
+    // receivable open and its revenue credited — while the caller still got a
+    // success. withTenantDb reuses an ambient transaction, so the void and the
+    // ledger writes underneath it join this one rather than opening their own.
+    const updated = await withTenantDb(async (tx) => {
+      const [row] = await tx
         .update(bookings)
         .set({
           status,
           updated_at: new Date(),
         })
         .where(eq(bookings.id, id))
-        .returning()
-    );
+        .returning();
 
-    if (updated) {
       // A cancelled booking should stop showing as money owed. Void rather
       // than delete: the accrual was posted, so the row stays and its status
       // changes. Anything already settled against it is left alone — that is
       // a refund question, not a bookkeeping one.
-      if (status === 'cancelled') {
-        await voidBookingReceivables(updated.id);
+      if (row && status === 'cancelled') {
+        await voidBookingReceivables(row.id);
       }
 
+      return row;
+    });
+
+    if (updated) {
       // Invalidate caches using helper
       await invalidateBooking(
         updated.id,
@@ -583,8 +590,10 @@ export const cancelBooking = async (id) => {
       })
     );
 
-    const [cancelled] = await withTenantDb((tx) =>
-      tx
+    // One transaction, for the same reason as updateBookingStatus: a booking
+    // must not commit as cancelled while its receivable stays open.
+    const cancelled = await withTenantDb(async (tx) => {
+      const [row] = await tx
         .update(bookings)
         .set({
           status: 'cancelled',
@@ -592,16 +601,18 @@ export const cancelBooking = async (id) => {
           updated_at: new Date(),
         })
         .where(eq(bookings.id, id))
-        .returning()
-    );
+        .returning();
 
-    if (cancelled) {
       // cancelBooking is a separate path from updateBookingStatus, so voiding
       // has to happen here too — otherwise a booking cancelled through this
       // route keeps showing as money owed. Safe to repeat: it only touches
       // rows still 'open'.
-      await voidBookingReceivables(cancelled.id);
+      if (row) await voidBookingReceivables(row.id);
 
+      return row;
+    });
+
+    if (cancelled) {
       // Send cancellation email
       try {
         await emailService.sendBookingCancellation(bookingToCancel);

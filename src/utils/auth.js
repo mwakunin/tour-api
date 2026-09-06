@@ -107,6 +107,12 @@ export const auth = betterAuth({
       // value keys rate limiting — so trusting a Vercel header on a
       // non-Vercel deployment lets a caller pick their own rate-limit bucket
       // and defeat it. Opt in explicitly where the ingress guarantees it.
+      //
+      // x-forwarded-for is safe to read here in either deployment: with an
+      // ingress in front the platform overwrites it, and without one app.js
+      // replaces it with the socket address before this ever runs. See the
+      // TRUSTED_PROXY_HOPS note there — that guarantee is what this relies on,
+      // so do not weaken it without revisiting this list.
       ipAddressHeaders:
         process.env.TRUST_VERCEL_FORWARDED_FOR === 'true'
           ? ['x-vercel-forwarded-for', 'x-forwarded-for']

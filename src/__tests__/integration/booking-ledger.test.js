@@ -212,4 +212,33 @@ describe('booking -> money layer bridge', () => {
     // somewhere it does not belong.
     expect(left).toBe(7500);
   });
+
+  it('reports a failed void instead of swallowing it', async () => {
+    const booking = await seedBooking('310.00');
+    created.push(booking.id);
+    await asTenant(() => bookingLedger.raiseBookingReceivable(booking));
+
+    // Called with no tenant context, so withTenantDb rejects. The failure
+    // itself is not the point -- what it stands in for is any failure to
+    // void: this used to be caught and turned into an empty array, so the
+    // cancellation that called it committed and answered success while the
+    // receivable stayed open and its revenue stayed credited, with nothing
+    // left to retry from. It has to reach the caller so the surrounding
+    // transaction rolls back.
+    await expect(
+      bookingLedger.voidBookingReceivables(booking.id)
+    ).rejects.toThrow(/tenant context/);
+
+    // And the receivable is untouched, not half-voided.
+    const still = await asTenant(() =>
+      withTenantDb((tx) =>
+        tx
+          .select()
+          .from(obligations)
+          .where(eq(obligations.source_id, booking.id))
+      )
+    );
+    expect(still).toHaveLength(1);
+    expect(still[0].status).toBe('open');
+  });
 });
