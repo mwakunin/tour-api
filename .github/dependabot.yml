@@ -1,0 +1,60 @@
+version: 2
+updates:
+  # ============================================
+  # NPM Dependencies (Root - Server)
+  # ============================================
+  - package-ecosystem: 'npm'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+      time: '09:00'
+      timezone: 'Africa/Nairobi'
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: 'chore(deps)'
+      include: 'scope'
+    labels:
+      - 'dependencies'
+      - 'automated'
+    groups:
+      all-dependencies:
+        update-types:
+          - 'minor'
+          - 'patch'
+    ignore:
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']
+
+  # ============================================
+  # GitHub Actions - Workflow Dependencies
+  # ============================================
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+      time: '09:00'
+      timezone: 'Africa/Nairobi'
+    commit-message:
+      prefix: 'chore(ci)'
+      include: 'scope'
+    labels:
+      - 'ci'
+      - 'github-actions'
+      - 'automated'
+
+  # ============================================
+  # Docker - Dockerfile Dependencies
+  # ============================================
+  - package-ecosystem: 'docker'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+      time: '09:00'
+      timezone: 'Africa/Nairobi'
+    commit-message:
+      prefix: 'chore(docker)'
+      include: 'scope'
+    labels:
+      - 'docker'
+      - 'infrastructure'
+      - 'automated'

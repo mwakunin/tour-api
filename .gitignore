@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store
+.npm
+
+# Environment files — never commit secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+combined.log
+error.log
+
+# Runtime
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Build artifacts
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+._*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Temp
+tmp/
+temp/
+.neon_local/
+
+# Docker — these stay in repo
+# (do NOT ignore Dockerfile or docker-compose files)
+coverage/

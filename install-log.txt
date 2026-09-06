@@ -1,0 +1,136 @@
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Progress: resolved 21, reused 0, downloaded 9, added 0
+Progress: resolved 29, reused 0, downloaded 19, added 0
+ WARN  deprecated imagekit@6.0.0: Please use @imagekit/nodejs
+Progress: resolved 47, reused 0, downloaded 30, added 0
+Progress: resolved 50, reused 0, downloaded 46, added 0
+Progress: resolved 72, reused 0, downloaded 58, added 0
+Progress: resolved 88, reused 0, downloaded 80, added 0
+Progress: resolved 113, reused 0, downloaded 100, added 0
+Progress: resolved 128, reused 0, downloaded 118, added 0
+Progress: resolved 145, reused 0, downloaded 126, added 0
+Progress: resolved 173, reused 0, downloaded 149, added 0
+Progress: resolved 189, reused 0, downloaded 168, added 0
+Progress: resolved 207, reused 0, downloaded 185, added 0
+Progress: resolved 225, reused 0, downloaded 205, added 0
+Progress: resolved 246, reused 0, downloaded 224, added 0
+Progress: resolved 255, reused 0, downloaded 238, added 0
+Progress: resolved 269, reused 0, downloaded 240, added 0
+Progress: resolved 294, reused 0, downloaded 247, added 0
+Progress: resolved 318, reused 0, downloaded 263, added 0
+Progress: resolved 343, reused 0, downloaded 294, added 0
+Progress: resolved 366, reused 0, downloaded 315, added 0
+Progress: resolved 387, reused 0, downloaded 333, added 0
+Progress: resolved 403, reused 0, downloaded 354, added 0
+Progress: resolved 427, reused 0, downloaded 363, added 0
+Progress: resolved 439, reused 0, downloaded 385, added 0
+Progress: resolved 466, reused 0, downloaded 411, added 0
+Progress: resolved 519, reused 0, downloaded 436, added 0
+Progress: resolved 521, reused 0, downloaded 436, added 0
+Progress: resolved 538, reused 0, downloaded 448, added 0
+Progress: resolved 554, reused 0, downloaded 466, added 0
+Progress: resolved 582, reused 0, downloaded 493, added 0
+Progress: resolved 605, reused 0, downloaded 508, added 0
+Progress: resolved 628, reused 0, downloaded 530, added 0
+Progress: resolved 653, reused 0, downloaded 557, added 0
+Progress: resolved 671, reused 0, downloaded 577, added 0
+Progress: resolved 714, reused 0, downloaded 591, added 0
+Progress: resolved 729, reused 0, downloaded 614, added 0
+Progress: resolved 766, reused 0, downloaded 629, added 0
+Progress: resolved 788, reused 0, downloaded 644, added 0
+Progress: resolved 818, reused 0, downloaded 677, added 0
+Progress: resolved 837, reused 0, downloaded 693, added 0
+Progress: resolved 841, reused 0, downloaded 718, added 0
+ WARN  12 deprecated subdependencies found: @esbuild-kit/core-utils@3.3.2, @esbuild-kit/esm-loader@2.6.5, glob@10.5.0, glob@11.1.0, glob@7.2.3, har-validator@5.1.5, inflight@1.0.6, q@1.5.1, request@2.88.2, uuid@10.0.0, uuid@3.4.0, uuid@8.3.2
+Packages: +745
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 842, reused 0, downloaded 744, added 1
+Progress: resolved 842, reused 0, downloaded 745, added 577
+Progress: resolved 842, reused 0, downloaded 749, added 738
+Progress: resolved 842, reused 0, downloaded 750, added 743
+Progress: resolved 842, reused 0, downloaded 750, added 744
+Progress: resolved 842, reused 0, downloaded 750, added 745
+Progress: resolved 842, reused 0, downloaded 750, added 745, done
+.../core-js@3.49.0/node_modules/core-js postinstall$ node -e "try{require('./postinstall')}catch(e){}"
+.../esbuild@0.25.12/node_modules/esbuild postinstall$ node install.js
+.../node_modules/unrs-resolver postinstall$ node postinstall.js
+.../esbuild@0.28.1/node_modules/esbuild postinstall$ node install.js
+.../esbuild@0.18.20/node_modules/esbuild postinstall$ node install.js
+.../core-js@3.49.0/node_modules/core-js postinstall: Thank you for using core-js ( https://github.com/zloirock/core-js ) for polyfilling JavaScript standard library!
+.../core-js@3.49.0/node_modules/core-js postinstall: The project needs your help! Please consider supporting core-js:
+.../core-js@3.49.0/node_modules/core-js postinstall: > https://opencollective.com/core-js 
+.../core-js@3.49.0/node_modules/core-js postinstall: > https://patreon.com/zloirock 
+.../core-js@3.49.0/node_modules/core-js postinstall: > https://boosty.to/zloirock 
+.../core-js@3.49.0/node_modules/core-js postinstall: > bitcoin: bc1qlea7544qtsmj2rayg0lthvza9fau63ux0fstcz 
+.../core-js@3.49.0/node_modules/core-js postinstall: I highly recommend reading this: https://github.com/zloirock/core-js/blob/master/docs/2023-02-14-so-whats-next.md 
+.../core-js@3.49.0/node_modules/core-js postinstall: Done
+.../node_modules/unrs-resolver postinstall: Done
+.../node_modules/@scarf/scarf postinstall$ node ./report.js
+.../node_modules/@scarf/scarf postinstall: Done
+.../@sentry/node-cpu-profiler install$ node scripts/check-build.js
+.../esbuild@0.18.20/node_modules/esbuild postinstall: Done
+.../esbuild@0.28.1/node_modules/esbuild postinstall: Done
+.../@sentry/node-cpu-profiler install: @sentry/profiling-node: Precompiled binary found, attempting to load /home/nico/Videos/PROJECTS/boldafrica/api/node_modules/.pnpm/@sentry+node-cpu-profiler@2.4.2/node_modules/@sentry/node-cpu-profiler/lib/sentry_cpu_profiler-linux-x64-glibc-115.node
+.../@sentry/node-cpu-profiler install: @sentry/profiling-node: Precompiled binary found, skipping build from source.
+.../@sentry/node-cpu-profiler install: Done
+.../esbuild@0.25.12/node_modules/esbuild postinstall: Done
+
+> bold-africa-adventures@1.0.0 prepare /home/nico/Videos/PROJECTS/boldafrica/api
+> husky
+
+.git can't be found
+dependencies:
++ @arcjet/inspect 1.5.0
++ @arcjet/node 1.5.0
++ @kinde-oss/kinde-node-express 1.7.0 (2.0.1 is available)
++ @neondatabase/serverless 1.1.0
++ @sentry/node 10.62.0
++ @sentry/profiling-node 10.62.0
++ axios 1.18.1
++ connect-redis 6.1.3 (9.0.0 is available)
++ cookie 1.1.1 (2.0.0 is available)
++ cookie-parser 1.4.7
++ cors 2.8.6
++ dotenv 17.4.2
++ drizzle-orm 0.44.7 (0.45.2 is available)
++ express 5.2.1
++ express-session 1.19.0
++ flutterwave-node-v3 1.4.1
++ helmet 8.2.0
++ imagekit 6.0.0 deprecated
++ ioredis 5.11.1
++ jsonwebtoken 9.0.3
++ jspdf 3.0.4 (4.2.1 is available)
++ jspdf-autotable 5.0.8
++ jwks-rsa 3.2.2 (4.1.0 is available)
++ morgan 1.11.0
++ multer 2.2.0
++ openid-client 5.7.1 (6.8.4 is available)
++ paystack 2.0.1
++ postgres 3.4.9
++ resend 6.16.0
++ swagger-jsdoc 6.3.0
++ swagger-ui-express 5.0.1
++ uuid 13.0.2 (14.0.1 is available)
++ winston 3.19.0
++ ws 8.21.0
++ zod 4.4.3
+
+devDependencies:
++ @eslint/js 9.39.4 (10.0.1 is available)
++ @jest/globals 30.4.1
++ @types/jest 30.0.0
++ cookie-signature 1.2.2
++ drizzle-kit 0.31.10
++ eslint 9.39.4 (10.6.0 is available)
++ eslint-config-prettier 10.1.8
++ eslint-formatter-compact 9.0.1
++ eslint-plugin-prettier 5.5.6
++ husky 9.1.7
++ jest 30.4.2
++ jest-circus 30.4.2
++ lint-staged 16.4.0 (17.0.8 is available)
++ prettier 3.9.4
++ supertest 7.2.2
+
+Done in 2m 30.3s

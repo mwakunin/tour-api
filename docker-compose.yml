@@ -1,0 +1,74 @@
+name: footloose-api
+
+services:
+  api:
+    image: footloose-api:dev
+    build:
+      context: .
+      target: development
+      network: host
+    container_name: footloose-api-dev
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - IS_DOCKER=true
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy # 👈 wait for postgres too
+    networks:
+      - footloose-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: footloose-postgres
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: footloose_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - footloose-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: footloose-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - footloose-network
+    restart: unless-stopped
+
+networks:
+  footloose-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:

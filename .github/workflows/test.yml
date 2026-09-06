@@ -1,0 +1,99 @@
+name: Test Backend
+
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: footloose_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/footloose_test
+        run: pnpm run db:migrate
+
+      - name: Run Tests
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/footloose_test
+          REDIS_URL: redis://localhost:6379
+          SESSION_SECRET: test-secret-key-for-ci
+          BETTER_AUTH_SECRET: test-better-auth-secret
+          FRONTEND_URL: http://localhost:3001
+          BACKEND_URL: http://localhost:3000
+          APP_URL: http://localhost:3000
+
+          # ImageKit (placeholders — mocked in tests, never actually called)
+          IMAGEKIT_PUBLIC_KEY: test_public_key
+          IMAGEKIT_PRIVATE_KEY: test_private_key
+          IMAGEKIT_URL_ENDPOINT: http://localhost/fake-imagekit
+
+          # Resend (placeholder — not actually called in most tests)
+          RESEND_API_KEY: re_test_placeholder_key
+
+          # Arcjet
+          ARCJET_KEY: test_arcjet_key
+
+          # Payment providers (placeholders). These must mirror the keys in the
+          # local .env.test, which is gitignored and therefore absent in CI.
+          # mpesa.service.js and pesapal.service.js are mocked in the tests, but
+          # paystack.service.js is not — only axios is — so its real config
+          # validation runs here and needs a value to find.
+          # *_ENV stay on sandbox so nothing can resolve to a live endpoint.
+          PAYSTACK_PUBLIC_KEY: pk_test_placeholder
+          PAYSTACK_SECRET_KEY: sk_test_placeholder
+          PESAPAL_CONSUMER_KEY: test_pesapal_key
+          PESAPAL_CONSUMER_SECRET: test_pesapal_secret
+          PESAPAL_ENV: sandbox
+          MPESA_CONSUMER_KEY: test_mpesa_key
+          MPESA_CONSUMER_SECRET: test_mpesa_secret
+          MPESA_PASSKEY: test_mpesa_passkey
+          MPESA_SHORTCODE: "174379"
+          MPESA_ENV: sandbox
+        run: pnpm test

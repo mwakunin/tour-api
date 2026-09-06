@@ -1,0 +1,46 @@
+# Dependencies — always reinstalled in container
+node_modules/
+.pnpm-store
+.npm
+
+# Environment files — injected at runtime
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+combined.log
+error.log
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+tmp/
+temp/
+.neon_local/
+
+# Docs
+*.md
+docs/
+
+# Test files — not needed in production image
+test/
+tests/
+__tests__/
+*.test.js
+*.spec.js
+
