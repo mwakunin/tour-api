@@ -92,6 +92,13 @@
       "when": 1788673870886,
       "tag": "0012_unique_settlement_per_payment",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788690081736,
+      "tag": "0013_fx_rate_tenant_integrity",
+      "breakpoints": true
     }
   ]
 }

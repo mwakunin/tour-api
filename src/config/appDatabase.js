@@ -56,9 +56,17 @@ export const appPool = postgres(connectionUrl, {
     (process.env.NODE_ENV === 'production' ? 15 : 10),
   idle_timeout: 60,
   connect_timeout: isRemote ? 30 : 10,
+  // Verified by default. rejectUnauthorized:false accepts any certificate,
+  // which makes the TLS decorative — an attacker between the app and the
+  // database can present their own and read every query and result.
+  //
+  // Managed providers (Supabase, RDS, Neon) use publicly trusted CAs and need
+  // nothing further. A private chain should supply its CA via
+  // NODE_EXTRA_CA_CERTS rather than disabling verification. DB_SSL_NO_VERIFY
+  // exists only as a deliberate, temporary escape hatch.
   ssl:
     process.env.NODE_ENV === 'production'
-      ? { rejectUnauthorized: false }
+      ? { rejectUnauthorized: process.env.DB_SSL_NO_VERIFY !== 'true' }
       : false,
 });
 

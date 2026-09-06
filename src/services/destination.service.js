@@ -415,7 +415,7 @@ export const getRevenueBreakdown = async () => {
           SELECT 
             dr.name,
             ROUND(CAST(dr.revenue AS NUMERIC), 2) as revenue,
-            ROUND(CAST((dr.revenue / t.total_revenue * 100) AS NUMERIC), 1) as percentage
+            ROUND(CAST((dr.revenue / NULLIF(t.total_revenue, 0) * 100) AS NUMERIC), 1) as percentage
           FROM destination_revenue dr
           CROSS JOIN total t
           ORDER BY dr.revenue DESC;

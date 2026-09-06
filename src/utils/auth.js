@@ -75,6 +75,11 @@ export const auth = betterAuth({
       role: {
         type: 'string',
         defaultValue: 'user',
+        // Better Auth accepts additionalFields as sign-up input unless this is
+        // set. Without it a registrant could POST role:'admin' and receive
+        // admin on every requireAdmin route. Role changes belong to the
+        // admin-facing update path only.
+        input: false,
       },
     },
   },
@@ -97,7 +102,15 @@ export const auth = betterAuth({
       // `x-vercel-forwarded-for` carries the real client as a single value, and
       // falling through to `x-forwarded-for` keeps direct-to-Cloud-Run requests
       // (which arrive with one entry) resolving correctly too.
-      ipAddressHeaders: ['x-vercel-forwarded-for', 'x-forwarded-for'],
+      // Only headers the ingress is known to overwrite. Any header listed
+      // here that the platform does not strip is caller-controlled, and this
+      // value keys rate limiting — so trusting a Vercel header on a
+      // non-Vercel deployment lets a caller pick their own rate-limit bucket
+      // and defeat it. Opt in explicitly where the ingress guarantees it.
+      ipAddressHeaders:
+        process.env.TRUST_VERCEL_FORWARDED_FOR === 'true'
+          ? ['x-vercel-forwarded-for', 'x-forwarded-for']
+          : ['x-forwarded-for'],
     },
   },
   trustedOrigins,

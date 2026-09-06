@@ -58,10 +58,21 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/footloose_test
         run: pnpm run db:migrate
 
+      - name: Provision the RLS runtime role
+        env:
+          # Migration 0008 creates tourops_app NOLOGIN; this grants it a
+          # password so appDatabase.js can connect. Without it, importing
+          # appDatabase throws and every integration test fails at load.
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/footloose_test
+          APP_DB_PASSWORD: ci_app_role_password
+        run: pnpm run db:app-role
+
       - name: Run Tests
         env:
           NODE_ENV: test
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/footloose_test
+          APP_DATABASE_URL: postgresql://tourops_app:ci_app_role_password@localhost:5432/footloose_test
+          APP_DB_PASSWORD: ci_app_role_password
           REDIS_URL: redis://localhost:6379
           SESSION_SECRET: test-secret-key-for-ci
           BETTER_AUTH_SECRET: test-better-auth-secret

@@ -230,7 +230,6 @@ export const createBooking = async (data) => {
       await emailService.sendBookingConfirmation(completeBooking);
       logger.info('Booking confirmation email sent successfully', {
         bookingId: booking.id,
-        email: completeBooking.user?.email,
       });
     } catch (emailError) {
       logger.error('Failed to send booking confirmation email:', {
