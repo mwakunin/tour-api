@@ -1,0 +1,47 @@
+# CodeRabbit configuration.
+#
+# The free plan reviews at most 100 files per PR. The full tree is 176, so
+# these filters cut it to 94 by dropping everything that is generated,
+# vendored, or infrastructure rather than application logic.
+#
+# What is deliberately NOT reviewed here, and why:
+#
+#   drizzle/meta/**      machine-generated schema snapshots, thousands of
+#                        lines, nothing a reviewer can act on
+#   drizzle/*.sql        migrations; reviewed in the focused PR against the
+#                        `baseline` branch, where they are the point
+#   src/__tests__/**     large, and covered by the focused PR
+#   src/docs, swagger.js generated API description, not hand-written logic
+#   Dockerfile, compose, build and tooling config rather than application code
+#   scripts, *.config.*
+#
+# The focused PR (base `baseline`, 65 files) reviews the tenancy and money
+# layer work including its migrations and tests. This one exists to audit the
+# inherited application source, so application source is what it keeps.
+
+reviews:
+  path_filters:
+    - "!drizzle/**"
+    - "!.github/**"
+    - "!**/*.md"
+    - "!src/__tests__/**"
+    - "!src/docs/**"
+    - "!src/config/swagger.js"
+    - "!pnpm-lock.yaml"
+    - "!pnpm-workspace.yaml"
+    - "!.npmrc"
+    - "!.gitignore"
+    - "!.dockerignore"
+    - "!.prettierrc"
+    - "!.prettierignore"
+    - "!.husky/**"
+    - "!install-log.txt"
+    - "!jest.config.mjs"
+    - "!jest.setup.js"
+    - "!.env.example"
+    - "!Dockerfile"
+    - "!docker-compose*.yml"
+    - "!scripts/**"
+    - "!start.js"
+    - "!drizzle.config.js"
+    - "!eslint.config.js"
