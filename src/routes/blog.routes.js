@@ -2,7 +2,10 @@
 import express from 'express';
 import * as blogController from '#controllers/blog.controller.js';
 import { requireAuth, requireAdmin } from '#middleware/auth.middleware.js';
-import { publicSecurityMiddleware } from '#middleware/security.middleware.js';
+import {
+  authSecurityMiddleware,
+  publicSecurityMiddleware,
+} from '#middleware/security.middleware.js';
 
 const router = express.Router();
 
@@ -38,6 +41,7 @@ router.get(
 // Get all posts (including drafts)
 router.get(
   '/admin/posts',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.getAllPosts
@@ -46,6 +50,7 @@ router.get(
 // Get single post by ID
 router.get(
   '/admin/posts/id/:id',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.getPostById
@@ -54,6 +59,7 @@ router.get(
 // Get single post by slug (including drafts)
 router.get(
   '/admin/posts/slug/:slug',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.getPostBySlug
@@ -62,6 +68,7 @@ router.get(
 // Create new post
 router.post(
   '/admin/posts',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.createPost
@@ -70,6 +77,7 @@ router.post(
 // Update post
 router.put(
   '/admin/posts/:id',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.updatePost
@@ -78,6 +86,7 @@ router.put(
 // Delete post
 router.delete(
   '/admin/posts/:id',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.deletePost
@@ -90,6 +99,7 @@ router.delete(
 // Get category by ID
 router.get(
   '/admin/categories/:id',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.getCategoryById
@@ -98,6 +108,7 @@ router.get(
 // Create category
 router.post(
   '/admin/categories',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.createCategory
@@ -106,6 +117,7 @@ router.post(
 // Update category
 router.put(
   '/admin/categories/:id',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.updateCategory
@@ -114,6 +126,7 @@ router.put(
 // Delete category
 router.delete(
   '/admin/categories/:id',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
   blogController.deleteCategory

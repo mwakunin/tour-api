@@ -24,6 +24,8 @@ jest.mock('#utils/invoiceGenerator.js', () => ({
 // ✅ FIX 2: Import emailService AFTER mocking dependencies
 import { emailService } from '#services/email.service.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
+import { tenants } from '#models/tenant.model.js';
+import { runWithTenant } from '#config/tenantContext.js';
 
 // ✅ FIX 3: Spy on emailService methods directly (don't mock Resend)
 let sendContactFormEmailSpy;
@@ -403,6 +405,47 @@ describe('Email Service Integration Tests', () => {
 
       expect(result).toBeDefined();
       expect(sendAdminNotificationSpy).toHaveBeenCalledTimes(1);
+    });
+
+    // The bookings query is tenant scoped, but the recipient used to be a
+    // single deployment-wide ADMIN_EMAIL — so every operator's totals and
+    // revenue landed in the same inbox. RLS cannot catch that: the query is
+    // right, the address is wrong.
+    describe('admin recipient is resolved per tenant', () => {
+      afterEach(async () => {
+        await db
+          .update(tenants)
+          .set({ admin_email: null })
+          .where(eq(tenants.id, SEED_TENANT_ID));
+      });
+
+      it("uses the operator's own address when one is configured", async () => {
+        await db
+          .update(tenants)
+          .set({ admin_email: 'operator@example.com' })
+          .where(eq(tenants.id, SEED_TENANT_ID));
+
+        const recipient = await runWithTenant(SEED_TENANT_ID, () =>
+          emailService.resolveAdminEmail()
+        );
+
+        expect(recipient).toBe('operator@example.com');
+        expect(recipient).not.toBe(emailService.adminEmail);
+      });
+
+      it('falls back to the configured address when the tenant has none', async () => {
+        const recipient = await runWithTenant(SEED_TENANT_ID, () =>
+          emailService.resolveAdminEmail()
+        );
+
+        expect(recipient).toBe(emailService.adminEmail);
+      });
+
+      it('falls back outside any tenant context', async () => {
+        await expect(emailService.resolveAdminEmail()).resolves.toBe(
+          emailService.adminEmail
+        );
+      });
     });
   });
 

@@ -217,8 +217,21 @@ export const verifyPaystackPayment = async (reference) => {
       );
 
       if (completedPayment) {
+        // recordBookingSettlement reads booking.booking_reference for the
+        // settlement notes, which is what reconciliation matches on. Fetched
+        // here rather than at the later email step, which ran after this call
+        // and left every Paystack settlement with a null reference.
+        const settledBooking = await withTenantDb((tx) =>
+          tx.query.bookings.findFirst({
+            where: eq(bookings.id, payment.booking_id),
+          })
+        );
+
         // Money has moved: record it and spend it against the receivable.
-        await recordBookingSettlement({ payment: completedPayment });
+        await recordBookingSettlement({
+          payment: completedPayment,
+          booking: settledBooking,
+        });
       } else {
         logger.info(
           'Paystack completion already claimed, skipping settlement',

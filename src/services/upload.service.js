@@ -50,34 +50,53 @@ export const uploadFile = async (file, options = {}) => {
       responseFields: ['metadata'],
     });
 
-    const [fileRecord] = await withTenantDb((tx) =>
-      tx
-        .insert(files)
-        .values({
-          tenant_id: currentTenantId(),
+    // The remote upload has already happened. If the row insert fails the
+    // file stays in ImageKit with nothing pointing at it and nothing to find
+    // it by, so remove it before propagating the original error.
+    let fileRecord;
+    try {
+      [fileRecord] = await withTenantDb((tx) =>
+        tx
+          .insert(files)
+          .values({
+            tenant_id: currentTenantId(),
+            fileId: result.fileId,
+            fileName: result.name,
+            originalName: file.originalname,
+            url: result.url,
+            thumbnailUrl: result.thumbnailUrl || null,
+            folder,
+            fileType: file.mimetype.split('/')[0],
+            mimeType: file.mimetype,
+            size: result.size || file.size,
+            // ImageKit measures the image during upload, so these come free with
+            // the response — no sharp, no second decode. Null for video/raw, where
+            // ImageKit reports no dimensions.
+            width: result.width ?? null,
+            height: result.height ?? null,
+            tags: [folder, ...tags],
+            metadata: {
+              hasAlpha: result.metadata?.hasTransparency ?? null,
+              orientation: result.metadata?.exif?.image?.Orientation ?? null,
+            },
+            uploadedBy: userId,
+          })
+          .returning()
+      );
+    } catch (dbError) {
+      // The file is already in ImageKit. Nothing references it and nothing can
+      // find it again, so it would sit there costing storage forever.
+      try {
+        await imagekit.files.delete(result.fileId);
+      } catch (cleanupError) {
+        logger.error('Failed to remove orphaned ImageKit file', {
           fileId: result.fileId,
-          fileName: result.name,
-          originalName: file.originalname,
-          url: result.url,
-          thumbnailUrl: result.thumbnailUrl || null,
-          folder,
-          fileType: file.mimetype.split('/')[0],
-          mimeType: file.mimetype,
-          size: result.size || file.size,
-          // ImageKit measures the image during upload, so these come free with
-          // the response — no sharp, no second decode. Null for video/raw, where
-          // ImageKit reports no dimensions.
-          width: result.width ?? null,
-          height: result.height ?? null,
-          tags: [folder, ...tags],
-          metadata: {
-            hasAlpha: result.metadata?.hasTransparency ?? null,
-            orientation: result.metadata?.exif?.image?.Orientation ?? null,
-          },
-          uploadedBy: userId,
-        })
-        .returning()
-    );
+          error: cleanupError.message,
+        });
+      }
+      // The insert failure is the real error; cleanup is best effort.
+      throw dbError;
+    }
 
     // Invalidate caches after upload
     await cache.del(CacheKeys.filesByFolder(folder));

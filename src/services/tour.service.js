@@ -142,24 +142,26 @@ export const createTour = async (data) => {
     // Extract destination IDs before inserting tour
     const destinationIds = validated.destination_ids || [];
 
-    // Insert tour and get the created tour
-    const [tour] = await withTenantDb((tx) =>
-      tx.insert(tours).values(tourData).returning()
-    );
+    // Both writes in ONE withTenantDb callback, so they share a transaction.
+    // Split across two, a failed destination link — an invalid destination_id
+    // is enough — left the tour row committed with no destinations while the
+    // caller got an error. updateTour already did this correctly.
+    const tour = await withTenantDb(async (tx) => {
+      const [created] = await tx.insert(tours).values(tourData).returning();
 
-    // ✅ NEW: Insert tour-destination relationships if destinations provided
-    if (destinationIds.length > 0) {
-      const tourDestinationValues = destinationIds.map((destId, index) => ({
-        tenant_id: currentTenantId(),
-        tour_id: tour.id,
-        destination_id: destId,
-        order: index, // Preserve order
-      }));
+      if (destinationIds.length > 0) {
+        const tourDestinationValues = destinationIds.map((destId, index) => ({
+          tenant_id: currentTenantId(),
+          tour_id: created.id,
+          destination_id: destId,
+          order: index, // Preserve order
+        }));
 
-      await withTenantDb((tx) =>
-        tx.insert(tourDestinations).values(tourDestinationValues)
-      );
-    }
+        await tx.insert(tourDestinations).values(tourDestinationValues);
+      }
+
+      return created;
+    });
 
     // Invalidate list caches after creation
     await cache.delPattern(CacheKeys.patterns.tourLists());

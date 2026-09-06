@@ -2,9 +2,10 @@
 import { Resend } from 'resend';
 import logger from '#config/logger.js';
 import { generateInvoicePDF } from '../utils/invoiceGenerator.js';
-import { withTenantDb } from '#config/tenantContext.js';
+import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
-import { and, gte, lt } from 'drizzle-orm';
+import { tenants } from '#models/tenant.model.js';
+import { and, eq, gte, lt } from 'drizzle-orm';
 
 const escapeHtml = (str) =>
   String(str ?? '')
@@ -40,6 +41,41 @@ class EmailService {
     this.adminEmail = ADMIN_EMAIL;
   }
 
+  // The operator's own notification address rather than a deployment-wide
+  // constant. Operator identity is tenant configuration, not deployment (see
+  // the branding note in CLAUDE.md); with a single ADMIN_EMAIL every tenant's
+  // booking totals arrive in the same inbox, which is a cross-tenant leak that
+  // RLS cannot catch — the bookings query is correctly scoped, only the
+  // recipient is wrong.
+  //
+  // Falls back to the env var when the tenant has no address set, and when
+  // there is no tenant context at all, so pre-tenancy callers keep working.
+  async resolveAdminEmail() {
+    const tenantId = currentTenantId();
+    if (!tenantId) return this.adminEmail;
+
+    try {
+      const [tenant] = await withTenantDb((tx) =>
+        tx
+          .select({ email: tenants.admin_email })
+          .from(tenants)
+          .where(eq(tenants.id, tenantId))
+          .limit(1)
+      );
+      return tenant?.email || this.adminEmail;
+    } catch (error) {
+      // A lookup failure is not a reason to drop the notification.
+      logger.warn(
+        'Tenant admin email lookup failed, using configured default',
+        {
+          tenantId,
+          error: error.message,
+        }
+      );
+      return this.adminEmail;
+    }
+  }
+
   // ✅ Send booking confirmation email
   async sendBookingConfirmation(booking) {
     try {
@@ -54,8 +90,6 @@ class EmailService {
 
       logger.info('Sending booking confirmation email:', {
         bookingId: booking.id,
-        to: booking.customer_email,
-        customerName: booking.customer_name,
         reference: booking.booking_reference,
       });
 
@@ -160,7 +194,7 @@ class EmailService {
       }
 
       logger.info('Booking confirmation email sent:', {
-        to: booking.customer_email,
+        bookingId: booking.id,
         emailId: data.id,
       });
       return data;
@@ -230,7 +264,7 @@ class EmailService {
       }
 
       logger.info('Payment confirmation email sent with invoice:', {
-        to: booking.customer_email,
+        bookingId: booking.id,
         emailId: data.id,
       });
 
@@ -275,7 +309,7 @@ class EmailService {
       }
 
       logger.info('Cancellation email sent:', {
-        to: booking.customer_email,
+        bookingId: booking.id,
         emailId: data.id,
       });
       return data;
@@ -461,7 +495,6 @@ class EmailService {
       }
 
       logger.info('Inquiry confirmation sent to customer:', {
-        to: inquiry.email,
         emailId: data.id,
       });
       return data;
@@ -478,7 +511,7 @@ class EmailService {
 
       const { data, error } = await this.resend.emails.send({
         from: this.fromEmail,
-        to: [this.adminEmail],
+        to: [await this.resolveAdminEmail()],
         subject: `🎉 New Booking: ${booking.booking_reference}`,
         html: `
           <!DOCTYPE html>
@@ -553,10 +586,18 @@ class EmailService {
         return; // No bookings today
       }
 
-      const totalRevenue = todaysBookings.reduce(
-        (sum, b) => sum + parseFloat(b.total_price),
-        0
-      );
+      // Bookings are priced in either KES or USD (see formatCurrency), so a
+      // single total labelled KES quietly adds dollars to shillings. Group by
+      // the currency each booking was actually taken in.
+      const revenueByCurrency = todaysBookings.reduce((acc, b) => {
+        const currency = b.currency || 'KES';
+        acc[currency] = (acc[currency] || 0) + parseFloat(b.total_price);
+        return acc;
+      }, {});
+
+      const revenueSummary = Object.entries(revenueByCurrency)
+        .map(([currency, amount]) => formatCurrency(amount, currency))
+        .join(' + ');
 
       const paidBookings = todaysBookings.filter(
         (b) => b.payment_status === 'paid'
@@ -564,7 +605,7 @@ class EmailService {
 
       const { data, error } = await this.resend.emails.send({
         from: this.fromEmail,
-        to: [this.adminEmail],
+        to: [await this.resolveAdminEmail()],
         subject: `📊 Daily Booking Summary - ${today.toLocaleDateString()}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
@@ -575,7 +616,7 @@ class EmailService {
               <h2>Today's Stats</h2>
               <p><strong>Total Bookings:</strong> ${todaysBookings.length}</p>
               <p><strong>Paid:</strong> ${paidBookings}</p>
-              <p><strong>Total Revenue:</strong> KES ${totalRevenue.toFixed(2)}</p>
+              <p><strong>Total Revenue:</strong> ${revenueSummary}</p>
             </div>
           </div>
         `,

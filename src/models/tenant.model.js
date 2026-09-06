@@ -41,6 +41,17 @@ export const tenants = pgTable(
       .default('FA')
       .notNull(),
 
+    // Where operator notifications go: the daily booking summary and the
+    // new-booking alert. Was the deployment-wide ADMIN_EMAIL, which across
+    // tenants meant one operator's booking totals and revenue were emailed to
+    // whichever address the deployment happened to name — the query was tenant
+    // scoped but the recipient was not.
+    //
+    // Nullable on purpose: callers fall back to the env var, so the seeded
+    // tenant and any pre-tenancy deployment keep working until an operator
+    // sets its own.
+    admin_email: text('admin_email'),
+
     // Per-tenant M-Pesa / Pesapal credentials. Customer money settles directly
     // into the operator's own shortcode and NEVER routes through our account —
     // that is what keeps this product outside CBK payment-service licensing.

@@ -21,6 +21,7 @@ import {
   bookingCustomerEditableSchema,
   bookingPriceAdjustmentSchema,
 } from '#validations/booking.validation.js';
+import { paginationSchema } from '#validations/common.js';
 
 export const createBookingController = async (req, res, next) => {
   try {
@@ -51,17 +52,13 @@ export const createBookingController = async (req, res, next) => {
 
 export const getAllBookings = async (req, res, next) => {
   try {
-    const {
-      status,
-      payment_status,
-      tour_id,
-      start_date,
-      end_date,
-      limit = 10,
-      page = 1,
-    } = req.query;
+    const { status, payment_status, tour_id, start_date, end_date } = req.query;
 
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    // page=0 produced a negative offset and an unbounded limit reached the
+    // query untouched. paginationSchema coerces both, requires page positive
+    // and caps limit at 100.
+    const { page, limit } = paginationSchema.parse(req.query);
+    const offset = (page - 1) * limit;
 
     const { data, cached } = await getBookings({
       status,
@@ -69,7 +66,7 @@ export const getAllBookings = async (req, res, next) => {
       tour_id,
       start_date: start_date ? new Date(start_date) : undefined,
       end_date: end_date ? new Date(end_date) : undefined,
-      limit: parseInt(limit),
+      limit,
       offset,
     });
 
@@ -77,11 +74,18 @@ export const getAllBookings = async (req, res, next) => {
       success: true,
       data,
       count: data.length,
-      page: parseInt(page),
-      limit: parseInt(limit),
+      page,
+      limit,
       ...(cached && { cached: true }),
     });
   } catch (error) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.issues,
+      });
+    }
     logger.error('[Booking Controller] Get all error:', error);
     next(error);
   }
@@ -90,12 +94,13 @@ export const getAllBookings = async (req, res, next) => {
 export const getUserBookingsController = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { status, limit = 10, page = 1 } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const { status } = req.query;
+    const { page, limit } = paginationSchema.parse(req.query);
+    const offset = (page - 1) * limit;
 
     const { data, cached } = await getUserBookings(userId, {
       status,
-      limit: parseInt(limit),
+      limit,
       offset,
     });
 
@@ -103,11 +108,18 @@ export const getUserBookingsController = async (req, res, next) => {
       success: true,
       data,
       count: data.length,
-      page: parseInt(page),
-      limit: parseInt(limit),
+      page,
+      limit,
       ...(cached && { cached: true }),
     });
   } catch (error) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.issues,
+      });
+    }
     logger.error('[Booking Controller] Get user bookings error:', error);
     next(error);
   }

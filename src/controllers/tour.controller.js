@@ -54,7 +54,9 @@ export const searchToursController = async (req, res, next) => {
   try {
     const { q } = req.query;
 
-    if (!q || q.trim().length === 0) {
+    // Repeated ?q= params arrive as an array, and q.trim() threw a TypeError
+    // before this 400 could be returned.
+    if (typeof q !== 'string' || q.trim().length === 0) {
       return res.status(400).json({
         success: false,
         error: 'Search query is required',

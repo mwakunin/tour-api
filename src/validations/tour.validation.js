@@ -583,7 +583,12 @@ export const getGroupSizeRange = (pricing_periods) => {
 };
 
 // Validation helpers
-export const validateTour = (data) => tourSchema.parse(data);
+// tourCreateSchema, not tourSchema: tourSchema declares id, created_at and
+// updated_at as optional inputs, and createTour spreads the validated object
+// straight into the insert — so a caller could pick a new tour's primary key
+// and a repeat produced a unique-violation 500 instead of a validation error.
+// tourCreateSchema omits those three and carries the same pricing refinement.
+export const validateTour = (data) => tourCreateSchema.parse(data);
 export const validateTourUpdate = (data) => tourUpdateSchema.parse(data);
 
 // Partial schemas for updates

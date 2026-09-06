@@ -9,14 +9,18 @@ import {
 const router = express.Router();
 
 // Protected routes
-router.get('/me', requireAuth, publicSecurityMiddleware, getCurrentUser);
+// Security middleware first: behind requireAuth it never ran for an
+// unauthenticated request, so session validation could be hammered without
+// passing Arcjet's rate limiting or bot detection.
+router.get('/me', publicSecurityMiddleware, requireAuth, getCurrentUser);
 
 // Admin only
+// Same ordering: unauthenticated callers were rejected before Arcjet saw them.
 router.post(
   '/force-logout/:userId',
+  authSecurityMiddleware,
   requireAuth,
   requireAdmin,
-  authSecurityMiddleware,
   forceLogout
 );
 

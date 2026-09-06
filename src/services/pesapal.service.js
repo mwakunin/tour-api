@@ -491,8 +491,11 @@ async function handleSuccessfulPayment(bookingId, trackingId, transactionData) {
       tx
         .update(payments)
         .set({
-          status: 'completed',
-          completed_at: new Date(),
+          // Not status/completed_at: verifyPesapalPayment already claimed the
+          // transition and stamped the time. Rewriting completed_at here moved
+          // it to whenever this handler ran, and recordBookingSettlement uses
+          // it as occurredAt — so the ledger recorded the handler's clock
+          // rather than the moment the payment was claimed.
           response_data: JSON.stringify(transactionData),
         })
         .where(eq(payments.pesapal_tracking_id, trackingId))
