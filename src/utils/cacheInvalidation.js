@@ -160,6 +160,7 @@ export const invalidateUser = async (userId, email, kindeId) => {
 export const invalidateStats = async () => {
   try {
     await cache.delPattern(CacheKeys.patterns.allStats());
+    await cache.delPattern(CacheKeys.patterns.bookingStatsAll());
     logger.info('[Cache Invalidation] All stats caches cleared');
   } catch (error) {
     logger.error(

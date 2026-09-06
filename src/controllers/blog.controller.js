@@ -105,10 +105,14 @@ export const getAllPosts = async (req, res, next) => {
     // res.json({
     //  success: true,
     // ...result,
+    // Same unwrap as getPublishedPosts: cache.wrap returns { data, cached },
+    // so reading result.posts straight off it yields undefined on a cache hit.
+    const { posts, pagination } = result.data || result;
+
     res.json({
       success: true,
-      data: result.posts, // ✅ Change this
-      pagination: result.pagination,
+      data: posts,
+      pagination,
     });
   } catch (error) {
     if (error.name === 'ZodError') {

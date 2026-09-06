@@ -85,7 +85,7 @@ const rawCacheKeys = {
 
   tourBookings: (tourId) => `bookings:tour:${tourId}`,
 
-  bookingStats: () => 'bookings:stats',
+  bookingStats: (filters = {}) => `bookings:stats:${serializeFilters(filters)}`,
 
   bookingTrends: () => 'bookings:trends',
 
@@ -179,6 +179,10 @@ const rawCacheKeys = {
 
     // Stats patterns
     allStats: () => 'stats:*',
+    // 'stats:*' never matched 'bookings:stats...', so booking stats were not
+    // being invalidated at all. Now that the key carries filters there are
+    // many of them, which makes a pattern necessary rather than merely tidy.
+    bookingStatsAll: () => 'bookings:stats:*',
   },
 };
 

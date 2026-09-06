@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { emailSchema, phoneSchema } from './common.js';
+import { toDateKey } from './tour.validation.js';
 
 export const bookingCreateSchema = z
   .object({
@@ -47,9 +48,13 @@ export const bookingCreateSchema = z
   })
   .refine(
     (data) => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      return data.start_date >= today;
+      // Date-only keys, lexicographically — the same comparison tour
+      // availability uses. A local-midnight Date boundary compared against a
+      // UTC-parsed start_date shifts by the server's offset, so the same
+      // booking was valid or not depending on where the process ran.
+      const startKey = toDateKey(data.start_date);
+      const todayKey = toDateKey(new Date());
+      return startKey !== null && startKey >= todayKey;
     },
     {
       message: 'Start date cannot be in the past',

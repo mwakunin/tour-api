@@ -7,7 +7,7 @@ import {
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { payments } from '#models/payment.model.js';
 import { bookings } from '#models/booking.model.js';
-import { eq } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import logger from '#config/logger.js';
 import { emailService } from './email.service.js';
 import { cache } from '#utils/cache.js';
@@ -193,7 +193,9 @@ export const verifyPaystackPayment = async (reference) => {
         throw new Error('Payment amount mismatch');
       }
 
-      // Update payment as completed
+      // Conditional on the payment still being incomplete, so concurrent
+      // verifications cannot both complete it. Only the caller whose UPDATE
+      // actually changes a row goes on to settle.
       const [completedPayment] = await withTenantDb((tx) =>
         tx
           .update(payments)
@@ -202,12 +204,23 @@ export const verifyPaystackPayment = async (reference) => {
             completed_at: new Date(),
             response_data: JSON.stringify(response.data),
           })
-          .where(eq(payments.id, payment.id))
+          .where(
+            and(eq(payments.id, payment.id), ne(payments.status, 'completed'))
+          )
           .returning()
       );
 
-      // Money has moved: record it and spend it against the receivable.
-      await recordBookingSettlement({ payment: completedPayment ?? payment });
+      if (completedPayment) {
+        // Money has moved: record it and spend it against the receivable.
+        await recordBookingSettlement({ payment: completedPayment });
+      } else {
+        logger.info(
+          'Paystack completion already claimed, skipping settlement',
+          {
+            paymentId: payment.id,
+          }
+        );
+      }
 
       // Update booking
       await withTenantDb((tx) =>

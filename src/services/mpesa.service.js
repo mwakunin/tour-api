@@ -3,10 +3,11 @@ import { mpesaConfig, requireMpesaConfig } from '#config/mpesa.config.js';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { payments } from '#models/payment.model.js';
 import { bookings } from '#models/booking.model.js';
-import { eq } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import logger from '#config/logger.js';
 import { emailService } from './email.service.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
+import { invalidateBooking } from '#utils/cacheInvalidation.js';
 
 // Logged once per process so "are we hitting live Safaricom?" is answerable
 // from the logs rather than inferred from a URL in an error message.
@@ -264,9 +265,13 @@ export const handleMpesaCallback = async (callbackData) => {
         (item) => item.Name === 'PhoneNumber'
       )?.Value;
 
-      // Update payment as completed
-      const [completedPayment] = await withTenantDb((tx) =>
-        tx
+      // Both writes in one transaction: separately, a failure between them
+      // left the payment completed while the booking still read pending —
+      // money taken, booking unconfirmed, and nothing to reconcile it against.
+      // The UPDATE is also conditional on the payment not already being
+      // completed, so a retried callback claims nothing and settles nothing.
+      const [completedPayment] = await withTenantDb(async (tx) => {
+        const updated = await tx
           .update(payments)
           .set({
             status: 'completed',
@@ -275,27 +280,39 @@ export const handleMpesaCallback = async (callbackData) => {
             completed_at: new Date(),
             response_data: JSON.stringify(callbackData),
           })
-          .where(eq(payments.id, payment.id))
-          .returning()
-      );
+          .where(
+            and(eq(payments.id, payment.id), ne(payments.status, 'completed'))
+          )
+          .returning();
+
+        if (updated.length > 0) {
+          await tx
+            .update(bookings)
+            .set({
+              payment_status: 'paid',
+              payment_method: 'mpesa',
+              payment_id: mpesaReceiptNumber,
+              status: 'confirmed',
+              updated_at: new Date(),
+            })
+            .where(eq(bookings.id, payment.booking_id));
+        }
+        return updated;
+      });
+
+      if (!completedPayment) {
+        logger.info('M-Pesa completion already claimed, skipping', {
+          paymentId: payment.id,
+          checkoutRequestId: CheckoutRequestID,
+        });
+        return { success: true, message: 'Payment already processed' };
+      }
 
       // Money has moved: record it in the ledger and spend it against the
-      // booking's receivable. Never throws.
-      await recordBookingSettlement({ payment: completedPayment ?? payment });
-
-      // Update booking payment status
-      await withTenantDb((tx) =>
-        tx
-          .update(bookings)
-          .set({
-            payment_status: 'paid',
-            payment_method: 'mpesa',
-            payment_id: mpesaReceiptNumber,
-            status: 'confirmed',
-            updated_at: new Date(),
-          })
-          .where(eq(bookings.id, payment.booking_id))
-      );
+      // booking's receivable. Deliberately outside the transaction above so a
+      // ledger failure cannot roll back a payment the customer already made.
+      // Never throws.
+      await recordBookingSettlement({ payment: completedPayment });
 
       // ✅ Get complete booking with tour details for email
       const booking = await withTenantDb((tx) =>
@@ -325,16 +342,18 @@ export const handleMpesaCallback = async (callbackData) => {
         }
       }
 
-      // ✅ Invalidate caches
+      // Uses the shared helper. This previously imported '#config/cache.js',
+      // which does not exist — and because the import sat inside this
+      // try/catch it failed silently, so booking caches were never cleared
+      // after a successful payment and clients kept reading a stale pending
+      // booking.
       try {
-        const { cache, CacheKeys } = await import('#config/cache.js');
-        await cache.del(CacheKeys.booking(payment.booking_id));
-        if (booking?.user_id) {
-          await cache.delPattern(
-            CacheKeys.patterns.userBookings(booking.user_id)
-          );
-        }
-        await cache.delPattern(CacheKeys.patterns.bookingLists());
+        await invalidateBooking(
+          payment.booking_id,
+          booking?.user_id,
+          booking?.tour_id,
+          booking?.booking_reference
+        );
         logger.info('Caches invalidated for booking:', payment.booking_id);
       } catch (cacheError) {
         logger.error('Cache invalidation error (non-critical):', cacheError);

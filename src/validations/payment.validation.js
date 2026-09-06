@@ -218,7 +218,9 @@ export const paymentStatusQuerySchema = z.object({
 });
 
 export const paymentHistoryQuerySchema = z.object({
-  user_id: z.number().int().positive().optional(),
+  // Better Auth issues string ids, so an integer here could never match a
+  // real user — the filter silently rejected every request that used it.
+  user_id: z.string().optional(),
   booking_id: z.string().uuid().optional(),
   payment_method: paymentMethodEnum.optional(),
   status: paymentStatusEnum.optional(),

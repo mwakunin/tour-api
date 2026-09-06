@@ -14,6 +14,13 @@ export default [
         __dirname: 'readonly',
         __filename: 'readonly',
         URL: 'readonly',
+        // Node globals the config had not declared. `fetch` was already
+        // erroring before this change; AbortController is used alongside it to
+        // bound upstream calls.
+        fetch: 'readonly',
+        AbortController: 'readonly',
+        AbortSignal: 'readonly',
+        crypto: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
         setInterval: 'readonly',

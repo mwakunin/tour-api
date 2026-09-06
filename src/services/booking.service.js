@@ -627,7 +627,7 @@ export const cancelBooking = async (id) => {
  */
 export const getBookingStats = async (filters = {}) => {
   try {
-    const cacheKey = CacheKeys.bookingStats();
+    const cacheKey = CacheKeys.bookingStats(filters);
 
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {

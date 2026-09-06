@@ -12,7 +12,7 @@ import crypto from 'crypto';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
 import { payments } from '#models/payment.model.js';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
 
@@ -210,7 +210,10 @@ export const confirmBankTransfer = async (
       throw new Error('This booking has already been confirmed as paid');
     }
 
-    // Update booking status
+    // Conditional on payment_status still being pending. The check above read
+    // the booking earlier in the request, so two admins confirming the same
+    // bank transfer at once both passed it and both inserted a payment. The
+    // UPDATE is the guard: whoever changes the row owns the confirmation.
     const [updatedBooking] = await withTenantDb((tx) =>
       tx
         .update(bookings)
@@ -220,9 +223,18 @@ export const confirmBankTransfer = async (
           confirmed_at: new Date(),
           updated_at: new Date(),
         })
-        .where(eq(bookings.id, bookingId))
+        .where(
+          and(eq(bookings.id, bookingId), ne(bookings.payment_status, 'paid'))
+        )
         .returning()
     );
+
+    if (!updatedBooking) {
+      // Another caller got there first. Stopping here rather than throwing:
+      // the booking is confirmed, which is what the caller wanted.
+      logger.info('Bank transfer already confirmed, skipping', { bookingId });
+      return { alreadyConfirmed: true };
+    }
 
     // Create payment record
     const paymentRecord = {
