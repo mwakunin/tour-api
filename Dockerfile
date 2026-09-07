@@ -1,7 +1,7 @@
 # ============================================
 # Stage 1: Base - Minimal Alpine setup
 # ============================================
-FROM node:22-alpine AS base
+FROM node:26-alpine AS base
 
 # Install pnpm directly - bypass corepack network issues
 RUN npm install -g pnpm@11.17.0
@@ -65,7 +65,7 @@ RUN pnpm install --frozen-lockfile --prod --no-optional --ignore-scripts && \
 # ============================================
 # Stage 5: Production (Minimal runtime)
 # ============================================
-FROM node:22-alpine AS production
+FROM node:26-alpine AS production
 
 # Only install dumb-init (no curl needed)
 RUN apk add --no-cache dumb-init && \
