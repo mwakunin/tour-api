@@ -22,6 +22,7 @@ import inquiryRoutes from '#routes/inquiry.routes.js';
 import healthRoutes from '#routes/health.routes.js';
 import blogRoutes from '#routes/blog.routes.js';
 import chatRoutes from '#routes/chat.routes.js';
+import counterpartyRoutes from '#routes/counterparty.routes.js';
 import { corsOptions } from '#config/cors.config.js';
 import usersRoutes from '#routes/users.routes.js';
 import adminTestRoutes from '#routes/admin-test.routes.js';
@@ -148,6 +149,9 @@ app.use('/api/tours', tourRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/uploads', uploadRoutes);
 app.use('/api/payments', paymentRoutes);
+// The cost side: suppliers, agents and the rest of the money layer's
+// counterparties. Mounted after resolveTenant like every other /api route.
+app.use('/api/counterparties', counterpartyRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/inquiries', inquiryRoutes);
 app.use('/api/blog', blogRoutes);
