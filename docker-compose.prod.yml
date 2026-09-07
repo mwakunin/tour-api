@@ -1,0 +1,22 @@
+version: '3.8'
+services:
+  api:
+    image: footloose-api:latest
+    build:
+      context: .
+      target: production
+    container_name: footloose-api-prod
+    ports:
+      - '3000:3000'
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    env_file:
+      - .env.production
+    networks:
+      - footloose-network
+    restart: always
+
+networks:
+  footloose-network:
+    driver: bridge

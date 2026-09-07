@@ -1,0 +1,52 @@
+// src/db/schema/files.schema.js
+import {
+  pgTable,
+  text,
+  integer,
+  timestamp,
+  uuid,
+  jsonb,
+  index,
+} from 'drizzle-orm/pg-core';
+import { relations } from 'drizzle-orm';
+import { user } from './user.model.js';
+import { tenants } from './tenant.model.js';
+
+export const files = pgTable(
+  'files',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    // Tenant discriminator — see the note in tour.model.js.
+    tenant_id: uuid('tenant_id')
+      .references(() => tenants.id, { onDelete: 'restrict' })
+      .notNull(),
+    fileId: text('file_id').notNull().unique(), // ImageKit file ID
+    fileName: text('file_name').notNull(),
+    originalName: text('original_name').notNull(),
+    url: text('url').notNull(),
+    thumbnailUrl: text('thumbnail_url'),
+    folder: text('folder').notNull(),
+    fileType: text('file_type').notNull(), // image, video, etc.
+    mimeType: text('mime_type').notNull(),
+    size: integer('size').notNull(), // in bytes
+    width: integer('width'),
+    height: integer('height'),
+    tags: jsonb('tags').default([]),
+    metadata: jsonb('metadata').default({}),
+    uploadedBy: text('uploaded_by').references(() => user.id, {
+      onDelete: 'set null',
+    }), // FK to users table
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    tenantIdIdx: index('files_tenant_id_idx').on(table.tenant_id),
+  })
+);
+
+export const filesRelations = relations(files, ({ one }) => ({
+  uploader: one(user, {
+    fields: [files.uploadedBy],
+    references: [user.id],
+  }),
+}));

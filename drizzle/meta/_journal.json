@@ -1,0 +1,146 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1785228981965,
+      "tag": "0000_youthful_retro_girl",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1786460823695,
+      "tag": "0001_big_young_avengers",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1786512177919,
+      "tag": "0002_flowery_machine_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1786514971806,
+      "tag": "0003_tidy_gambit",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786739603576,
+      "tag": "0004_superb_silver_sable",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786796248979,
+      "tag": "0005_daily_shaman",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788612711679,
+      "tag": "0006_milky_morgan_stark",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788614357147,
+      "tag": "0007_swift_wendigo",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788615510398,
+      "tag": "0008_rls_money_layer",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788616829932,
+      "tag": "0009_grant_legacy_tables_to_app_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1788621244112,
+      "tag": "0010_rls_legacy_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1788621839548,
+      "tag": "0011_drop_tenant_id_default",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1788673870886,
+      "tag": "0012_unique_settlement_per_payment",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788690081736,
+      "tag": "0013_fx_rate_tenant_integrity",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1788698171943,
+      "tag": "0014_tenant_mpesa_shortcode_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1788698200880,
+      "tag": "0015_fantastic_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1788701646210,
+      "tag": "0016_round_revanche",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788726830871,
+      "tag": "0017_salty_outlaw_kid",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1788732620310,
+      "tag": "0018_fx_rates_write_isolation",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788739846847,
+      "tag": "0019_default_sequence_privileges",
+      "breakpoints": true
+    }
+  ]
+}

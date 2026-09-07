@@ -1,0 +1,74 @@
+name: tourops-api
+
+services:
+  api:
+    image: tourops-api:dev
+    build:
+      context: .
+      target: development
+      network: host
+    container_name: tourops-api-dev
+    ports:
+      - '3100:3000'
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - IS_DOCKER=true
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - /app/node_modules
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy # 👈 wait for postgres too
+    networks:
+      - tourops-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tourops-postgres
+    ports:
+      - '5437:5432'
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: tourops_dev
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - tourops-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: tourops-redis
+    ports:
+      - '6382:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - tourops-network
+    restart: unless-stopped
+
+networks:
+  tourops-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:

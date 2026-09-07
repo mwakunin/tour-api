@@ -1,0 +1,229 @@
+# Code Quality Workflow
+# ============================================
+name: Lint and Format Check
+
+# The summary step posts its result as a PR comment, which the default token
+# cannot do without this -- every run ended in "Resource not accessible by
+# integration" after the checks themselves had already finished.
+permissions:
+  contents: read
+  pull-requests: write
+
+on:
+  push:
+    branches:
+      - main
+      - staging
+      - develop
+  pull_request:
+    branches:
+      - main
+      - staging
+
+jobs:
+  lint-and-format:
+    name: Code Quality Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🔧 Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: 📦 Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # ✅ Run both checks together to save time
+      - name: 🔍 Run ESLint
+        id: eslint
+        run: |
+          echo "::group::ESLint Results"
+
+          # Run ESLint and capture output
+          if pnpm run lint; then
+            echo "✅ ESLint passed - no issues found!"
+            echo "ESLINT_STATUS=success" >> $GITHUB_ENV
+          else
+            echo "::error::ESLint found issues in your code"
+            echo "ESLINT_STATUS=failed" >> $GITHUB_ENV
+            
+            # Show files with issues in compact format
+            echo "::group::Files with issues"
+            pnpm run lint -- --format=compact || true
+            echo "::endgroup::"
+            
+            exit 1
+          fi
+
+          echo "::endgroup::"
+        continue-on-error: false
+
+      - name: 💅 Run Prettier check
+        id: prettier
+        run: |
+          echo "::group::Prettier Results"
+
+          # Run Prettier check
+          if pnpm run format:check; then
+            echo "✅ Prettier passed - all files properly formatted!"
+            echo "PRETTIER_STATUS=success" >> $GITHUB_ENV
+          else
+            echo "::error::Code formatting issues found"
+            echo "PRETTIER_STATUS=failed" >> $GITHUB_ENV
+            
+            # Show which files need formatting
+            echo "::group::Files needing formatting"
+            pnpm run format:check 2>&1 | grep -E '\.(js|ts|json|md)$' || echo "Run 'pnpm run format' to see affected files"
+            echo "::endgroup::"
+            
+            exit 1
+          fi
+
+          echo "::endgroup::"
+        continue-on-error: false
+
+      # ✅ Generate summary for both passing and failing cases
+      - name: 📊 Generate summary
+        if: always()
+        run: |
+          echo "## Code Quality Report 📋" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # ESLint status
+          if [ "${{ env.ESLINT_STATUS }}" == "success" ]; then
+            echo "### ✅ ESLint: Passed" >> $GITHUB_STEP_SUMMARY
+            echo "No linting issues found!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ ESLint: Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Linting issues detected. Run \`pnpm run lint:fix\` to auto-fix." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Prettier status
+          if [ "${{ env.PRETTIER_STATUS }}" == "success" ]; then
+            echo "### ✅ Prettier: Passed" >> $GITHUB_STEP_SUMMARY
+            echo "All files are properly formatted!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ Prettier: Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Formatting issues detected. Run \`pnpm run format\` to fix." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Add quick fix instructions if any check failed
+          if [ "${{ env.ESLINT_STATUS }}" == "failed" ] || [ "${{ env.PRETTIER_STATUS }}" == "failed" ]; then
+            echo "### 🔧 Quick Fix" >> $GITHUB_STEP_SUMMARY
+            echo '```bash' >> $GITHUB_STEP_SUMMARY
+            echo '# Fix linting issues' >> $GITHUB_STEP_SUMMARY
+            echo 'pnpm run lint:fix' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '# Fix formatting issues' >> $GITHUB_STEP_SUMMARY
+            echo 'pnpm run format' >> $GITHUB_STEP_SUMMARY
+            echo '' >> $GITHUB_STEP_SUMMARY
+            echo '# Run both checks again' >> $GITHUB_STEP_SUMMARY
+            echo 'pnpm run lint && pnpm run format:check' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ✅ Comment on PR with actionable feedback
+      - name: 📝 Comment on PR
+        if: github.event_name == 'pull_request' && failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const eslintFailed = process.env.ESLINT_STATUS === 'failed';
+            const prettierFailed = process.env.PRETTIER_STATUS === 'failed';
+
+            let message = '## ⚠️ Code Quality Checks Failed\n\n';
+
+            if (eslintFailed && prettierFailed) {
+              message += '**Both ESLint and Prettier checks failed.**\n\n';
+            } else if (eslintFailed) {
+              message += '**ESLint check failed.**\n\n';
+            } else if (prettierFailed) {
+              message += '**Prettier check failed.**\n\n';
+            }
+
+            message += '### 🔧 To fix these issues:\n\n';
+            message += '```bash\n';
+
+            if (eslintFailed) {
+              message += '# Fix linting issues\n';
+              message += 'pnpm run lint:fix\n\n';
+            }
+
+            if (prettierFailed) {
+              message += '# Fix formatting issues\n';
+              message += 'pnpm run format\n\n';
+            }
+
+            message += '# Verify fixes\n';
+            message += 'pnpm run lint && pnpm run format:check\n';
+            message += '```\n\n';
+            message += '### 📚 Need help?\n';
+            message += '- [ESLint Rules](https://eslint.org/docs/rules/)\n';
+            message += '- [Prettier Options](https://prettier.io/docs/en/options.html)\n';
+
+            // Check if a comment already exists
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment => 
+              comment.user.type === 'Bot' && 
+              comment.body.includes('Code Quality Checks Failed')
+            );
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: message
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: message
+              });
+            }
+
+      # ✅ Success notification with encouragement
+      - name: ✅ Success notification
+        if: success()
+        run: |
+          echo "::notice::All linting and formatting checks passed! ✅"
+          echo "::notice::Code quality is excellent! 🎉"
+
+          echo "## ✅ All Checks Passed! 🎉" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Your code meets all quality standards:" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ ESLint: No issues" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Prettier: Properly formatted" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Great work! 🚀" >> $GITHUB_STEP_SUMMARY
+
+      # ✅ Cleanup on failure
+      - name: 🧹 Cleanup
+        if: always()
+        run: |
+          # Clean up any temporary files
+          rm -rf node_modules/.cache

@@ -1,0 +1,98 @@
+# Deploy to Oracle Instance
+# ==========================
+# Manual trigger only for now. Once the Oracle instance is live, secrets are
+# set, and you're ready for pushes to main to auto-deploy, add back:
+#
+# on:
+#   push:
+#     branches:
+#       - main
+#   workflow_dispatch:
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   ORACLE_HOST      — instance's public IP
+#   ORACLE_USERNAME  — "ubuntu"
+#   ORACLE_SSH_KEY   — private key matching the public key attached at instance creation
+name: Deploy to Oracle
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to Oracle Instance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 🚀 Deploy to Oracle
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ORACLE_HOST }}
+          username: ${{ secrets.ORACLE_USERNAME }}
+          key: ${{ secrets.ORACLE_SSH_KEY }}
+          script: |
+            cd /home/ubuntu/app
+
+            echo "📥 Pulling latest image..."
+            docker compose pull
+
+            echo "🔄 Restarting containers..."
+            docker compose up -d --force-recreate
+
+            echo "⏳ Waiting for services to start..."
+            sleep 15
+
+            echo "🧹 Cleanup old images..."
+            docker image prune -af
+
+            echo "✅ Deployment complete!"
+            echo ""
+            echo "📊 Container Status:"
+            docker compose ps
+
+      # Goes through Nginx (port 80) rather than hitting the app's port 3000
+      # directly — matches how real traffic reaches the app, and avoids
+      # needing port 3000 open to the internet in the OCI Security List.
+      - name: 🏥 Health Check
+        run: |
+          echo "Waiting for application to be ready..."
+          sleep 10
+
+          echo "Running health check..."
+          if curl -f -m 10 http://${{ secrets.ORACLE_HOST }}/health; then
+            echo "✅ Health check passed!"
+          else
+            echo "❌ Health check failed!"
+            exit 1
+          fi
+
+      - name: 📊 Deployment Summary
+        if: success()
+        run: |
+          echo "## Deployment Summary 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Successfully deployed to Oracle!**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Server:** \`${{ secrets.ORACLE_HOST }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Git Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "- Health check passed ✅" >> $GITHUB_STEP_SUMMARY
+          echo "- Application is running" >> $GITHUB_STEP_SUMMARY
+          echo "- Old Docker images cleaned up" >> $GITHUB_STEP_SUMMARY
+
+      - name: ❌ Deployment Failed
+        if: failure()
+        run: |
+          echo "::error::Deployment to Oracle failed"
+          echo "## Deployment Failed ❌" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The deployment process failed. Check the logs above." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Troubleshooting:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Check SSH connection to the Oracle instance" >> $GITHUB_STEP_SUMMARY
+          echo "- Verify docker compose configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- Check application logs on the instance" >> $GITHUB_STEP_SUMMARY
+          echo "- Verify /health is accessible through Nginx" >> $GITHUB_STEP_SUMMARY

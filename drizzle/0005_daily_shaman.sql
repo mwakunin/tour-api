@@ -1,0 +1,1 @@
+ALTER TABLE "tours" ADD COLUMN "compare_at_amount" numeric(10, 2);

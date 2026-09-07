@@ -1,0 +1,199 @@
+# Cleanup Old Workflow Runs (GitHub CLI Method)
+# ==============================================
+# This workflow uses GitHub CLI to delete old workflow runs
+# More control and doesn't depend on third-party actions
+
+name: Cleanup Old Workflow Runs
+
+on:
+  schedule:
+    # Run daily at 2:00 AM UTC
+    - cron: '0 2 * * *'
+
+  # Allow manual trigger
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Days of runs to keep'
+        required: false
+        default: '7'
+      workflow_name:
+        description: 'Specific workflow to clean (leave empty for all)'
+        required: false
+        default: 'Keep Services Warm'
+
+jobs:
+  cleanup:
+    name: Delete Old Workflow Runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+      - name: 🧹 Delete old workflow runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DAYS: ${{ inputs.days || 7 }}
+          WORKFLOW: ${{ inputs.workflow_name || 'Keep Services Warm' }}
+        run: |
+          set +e  # Don't exit on error
+
+          echo "🔍 Finding workflow runs older than $DAYS days..."
+
+          # Calculate the date threshold
+          DATE_THRESHOLD=$(date -u -d "$DAYS days ago" +%Y-%m-%d)
+
+          echo "📅 Date threshold: $DATE_THRESHOLD"
+          echo "🎯 Target workflow: $WORKFLOW"
+
+          # Get workflow ID
+          WORKFLOW_ID=$(gh api repos/$REPO/actions/workflows \
+            --jq ".workflows[] | select(.name == \"$WORKFLOW\") | .id")
+
+          if [ -z "$WORKFLOW_ID" ]; then
+            echo "⚠️ Workflow '$WORKFLOW' not found"
+            echo "DELETED_COUNT=0" >> $GITHUB_ENV
+            echo "TOTAL_RUNS=0" >> $GITHUB_ENV
+            echo "DATE_THRESHOLD=$DATE_THRESHOLD" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          echo "🔢 Workflow ID: $WORKFLOW_ID"
+
+          # Count runs before deletion
+          TOTAL_RUNS=$(gh api repos/$REPO/actions/workflows/$WORKFLOW_ID/runs \
+            --paginate --jq '.workflow_runs | length' 2>/dev/null || echo "0")
+
+          echo "📊 Total runs found: $TOTAL_RUNS"
+
+          # Delete old runs
+          DELETED_COUNT=0
+          FAILED_COUNT=0
+
+          gh api repos/$REPO/actions/workflows/$WORKFLOW_ID/runs \
+            --paginate \
+            --jq ".workflow_runs[] | select(.created_at < \"$DATE_THRESHOLD\") | .id" 2>/dev/null | \
+          while read -r RUN_ID; do
+            echo "🗑️  Attempting to delete run ID: $RUN_ID"
+            
+            if gh api repos/$REPO/actions/runs/$RUN_ID -X DELETE 2>/dev/null; then
+              echo "   ✅ Successfully deleted"
+              ((DELETED_COUNT++))
+            else
+              echo "   ⚠️  Could not delete (may already be deleted or inaccessible)"
+              ((FAILED_COUNT++))
+            fi
+            
+            # Rate limit: sleep briefly between deletions
+            sleep 0.2
+          done
+
+          echo "✅ Cleanup completed!"
+          echo "📊 Successfully deleted: $DELETED_COUNT runs"
+          echo "⚠️  Failed/skipped: $FAILED_COUNT runs"
+
+          # Save stats for summary
+          echo "DELETED_COUNT=$DELETED_COUNT" >> $GITHUB_ENV
+          echo "TOTAL_RUNS=$TOTAL_RUNS" >> $GITHUB_ENV
+          echo "DATE_THRESHOLD=$DATE_THRESHOLD" >> $GITHUB_ENV
+
+      - name: 🧹 Clean up failed runs (all workflows)
+        continue-on-error: true # Don't fail the whole workflow if this step fails
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set +e  # Don't exit on error
+
+          echo "🔍 Cleaning up failed and cancelled runs older than 30 days..."
+
+          # Calculate date (30 days ago)
+          DATE_30_DAYS=$(date -u -d "30 days ago" +%Y-%m-%d)
+
+          echo "📅 Cleaning runs before: $DATE_30_DAYS"
+
+          FAILED_DELETED=0
+          FAILED_SKIPPED=0
+
+          # Delete failed runs with robust error handling
+          gh api repos/$REPO/actions/runs \
+            --paginate \
+            --jq ".workflow_runs[] | select(.conclusion == \"failure\" or .conclusion == \"cancelled\") | select(.created_at < \"$DATE_30_DAYS\") | .id" 2>/dev/null | \
+          while read -r RUN_ID; do
+            echo "🗑️  Attempting to delete failed/cancelled run: $RUN_ID"
+            
+            if gh api repos/$REPO/actions/runs/$RUN_ID -X DELETE 2>/dev/null; then
+              echo "   ✅ Successfully deleted"
+              ((FAILED_DELETED++))
+            else
+              echo "   ⚠️  Could not delete (may already be deleted)"
+              ((FAILED_SKIPPED++))
+            fi
+            
+            sleep 0.2
+          done
+
+          echo "✅ Failed runs cleanup completed!"
+          echo "📊 Successfully deleted: $FAILED_DELETED failed/cancelled runs"
+          echo "⚠️  Skipped: $FAILED_SKIPPED runs"
+
+          echo "FAILED_DELETED=$FAILED_DELETED" >> $GITHUB_ENV
+          echo "FAILED_SKIPPED=$FAILED_SKIPPED" >> $GITHUB_ENV
+
+      - name: 📊 Generate cleanup summary
+        if: always() # Run even if previous steps had issues
+        run: |
+          echo "## Workflow Cleanup Summary 🧹" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Cleanup Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Target workflow: \`${{ inputs.workflow_name || 'Keep Services Warm' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Retention period: **${{ inputs.days || 7 }} days**" >> $GITHUB_STEP_SUMMARY
+          echo "- Date threshold: \`${{ env.DATE_THRESHOLD }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Results:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Total runs found: **${{ env.TOTAL_RUNS }}**" >> $GITHUB_STEP_SUMMARY
+          echo "- Deleted old runs: **${{ env.DELETED_COUNT }}**" >> $GITHUB_STEP_SUMMARY
+          echo "- Deleted failed/cancelled: **${{ env.FAILED_DELETED }}**" >> $GITHUB_STEP_SUMMARY
+          echo "- Skipped (already deleted): **${{ env.FAILED_SKIPPED }}**" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          TOTAL_DELETED=$(( ${{ env.DELETED_COUNT }} + ${{ env.FAILED_DELETED }} ))
+          STORAGE_SAVED=$(( $TOTAL_DELETED * 5 ))
+
+          echo "**Storage Saved:** Approximately ${STORAGE_SAVED} MB" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Next automatic cleanup:** Tomorrow at 2:00 AM UTC" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*💡 Tip: You can manually trigger this workflow with custom parameters from the Actions tab*" >> $GITHUB_STEP_SUMMARY
+
+      - name: ⚠️ Partial cleanup notification
+        if: failure()
+        run: |
+          echo "::warning::Some workflow runs could not be deleted"
+          echo "## Cleanup Completed with Warnings ⚠️" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The workflow cleanup process completed but some runs could not be deleted." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Possible reasons:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Some runs were already deleted" >> $GITHUB_STEP_SUMMARY
+          echo "- Insufficient permissions for certain runs" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub API rate limits" >> $GITHUB_STEP_SUMMARY
+          echo "- Network connectivity issues" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**This is normal and not a critical issue.** The cleanup successfully removed accessible runs." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Manual cleanup (if needed):**" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo '# List all runs for the workflow' >> $GITHUB_STEP_SUMMARY
+          echo 'gh run list --workflow "Keep Services Warm" --limit 100' >> $GITHUB_STEP_SUMMARY
+          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '# Delete specific runs manually' >> $GITHUB_STEP_SUMMARY
+          echo 'gh run list --workflow "Keep Services Warm" --limit 100 --json databaseId -q ".[].databaseId" | xargs -I {} gh run delete {}' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
