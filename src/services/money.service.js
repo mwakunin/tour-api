@@ -73,7 +73,11 @@ const baseCurrencyOf = async (tx, tenantId) => {
  * A tenant's own rate wins over a shared one for the same date — an operator
  * who books at a contracted rate should not be silently repriced.
  */
-const findRate = async (tx, { tenantId, from, to, onDate }) => {
+// Exported so the FX endpoint can answer "which rate would a conversion on
+// this date use" with the same ordering the conversion itself applies. A
+// second implementation would drift, and the drift would only show as a
+// ledger entry nobody can explain.
+export const findRate = async (tx, { tenantId, from, to, onDate }) => {
   const [rate] = await tx
     .select()
     .from(fx_rates)

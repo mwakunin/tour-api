@@ -368,6 +368,25 @@ export const fx_rates = pgTable(
       table.quote_currency,
       table.as_of
     ),
+    // One rate per currency pair per day, per tenant, and one shared rate per
+    // pair per day. findRate orders by as_of DESC then tenant DESC NULLS LAST
+    // and takes the first row, which has no tiebreaker when two rows share a
+    // tenant and a date — so which rate a conversion used came down to
+    // physical row order, and a correction loaded alongside the original could
+    // be ignored indefinitely.
+    //
+    // NULLS NOT DISTINCT because tenant_id is NULL on shared rates: under the
+    // default every NULL is distinct from every other, so the constraint would
+    // simply not apply to the shared ones. Postgres 15+, which 0007 already
+    // requires.
+    tenantPairDateUnique: unique('fx_rates_tenant_pair_date_unique')
+      .on(
+        table.tenant_id,
+        table.base_currency,
+        table.quote_currency,
+        table.as_of
+      )
+      .nullsNotDistinct(),
     ratePositiveCk: check(
       'fx_rates_rate_ppm_positive',
       sql`${table.rate_ppm} > 0`
