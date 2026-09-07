@@ -27,4 +27,9 @@ export * from './tenant.model.js';
 // domain-neutral names.
 export * from './money.model.js';
 
+// Supplier invoices: the document a payable is raised from. Product-side
+// rather than part of the money layer, which stays domain-neutral — see the
+// source_type note in money.model.js.
+export * from './supplierInvoice.model.js';
+
 // 👉 Add more exports here if you create more tables later (reviews, payments, etc.)
