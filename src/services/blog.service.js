@@ -33,15 +33,10 @@ const calculateReadTime = (content) => {
 // Get all blog posts with filters
 export const getAllBlogPosts = async (filters = {}) => {
   try {
-    const {
-      page = 1,
-      limit = 10,
-      status = 'published',
-      category_id,
-      search,
-      sort_by = 'published_at',
-      sort_order = 'desc',
-    } = filters;
+    // Only these two are read here. The rest travel to fetchBlogPosts inside
+    // normalizedFilters, so unpacking them was noise that read as though this
+    // function handled paging and sorting itself.
+    const { status = 'published', search } = filters;
 
     // Normalize search for consistent caching
     const normalizedFilters = {
@@ -54,9 +49,9 @@ export const getAllBlogPosts = async (filters = {}) => {
 
     // ✅ Only cache published posts (not drafts for admin)
     if (status === 'published') {
-      return await cache.wrap(cacheKey, 300, async () => {
-        return await fetchBlogPosts(normalizedFilters);
-      });
+      return await cache.wrap(cacheKey, 300, () =>
+        fetchBlogPosts(normalizedFilters)
+      );
     }
 
     // Don't cache admin queries (drafts, etc.)

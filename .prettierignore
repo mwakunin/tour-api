@@ -3,6 +3,8 @@ coverage
 logs
 drizzle
 dist
+build
+.pnpm-store
 .env
 .env.*
 *.log

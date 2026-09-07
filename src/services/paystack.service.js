@@ -16,7 +16,18 @@ import { recordBookingSettlement } from './bookingLedger.service.js';
 
 // Paystack is a third party that can hang. Without a bound, a slow
 // response holds this request and its connection open indefinitely.
-const PAYSTACK_TIMEOUT_MS = Number(process.env.PAYSTACK_TIMEOUT_MS || 15000);
+//
+// Validated for the same reason CHAT_TIMEOUT_MS is, plus one specific to
+// axios: Number('15s') is NaN, which axios rejects outright with
+// ERR_BAD_OPTION_VALUE, so a mistyped value would fail every Paystack call
+// rather than bounding it. 0 means "no timeout" to axios, and anything under
+// 1 truncates to 0, so both would silently remove the bound this exists to
+// impose.
+const parsedPaystackTimeout = Number(process.env.PAYSTACK_TIMEOUT_MS);
+const PAYSTACK_TIMEOUT_MS =
+  Number.isFinite(parsedPaystackTimeout) && parsedPaystackTimeout >= 1
+    ? Math.floor(parsedPaystackTimeout)
+    : 15000;
 
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
 

@@ -321,7 +321,7 @@ export async function initializePesapalPayment({
       payment_method: 'pesapal',
       authorization_url: redirect_url,
       tracking_id: order_tracking_id,
-      merchant_reference: merchant_reference,
+      merchant_reference,
     };
   } catch (error) {
     logger.error(
@@ -487,7 +487,7 @@ export async function verifyPesapalPayment(orderTrackingId) {
  */
 export async function handlePesapalIPN(data) {
   try {
-    const { OrderTrackingId, OrderMerchantReference } = data;
+    const { OrderTrackingId } = data;
 
     if (!OrderTrackingId) {
       logger.warn('IPN received without tracking ID');

@@ -64,12 +64,8 @@ const options = {
     servers: [{ url: 'http://localhost:3000', description: 'Development' }],
     components: {
       schemas: {
-        Tour: {
-          /* Tour object structure */
-        },
-        Booking: {
-          /* Booking object structure */
-        },
+        Tour: {/* Tour object structure */},
+        Booking: {/* Booking object structure */},
         // ... etc
       },
     },
@@ -521,11 +517,7 @@ describe('Booking Reference Generation - Race Condition Test', () => {
     // Create 100 bookings simultaneously
     const promises = Array(100)
       .fill(null)
-      .map(() =>
-        createBooking({
-          /* ... */
-        })
-      );
+      .map(() => createBooking({/* ... */}));
 
     const bookings = await Promise.all(promises);
     const references = bookings.map((b) => b.booking_reference);

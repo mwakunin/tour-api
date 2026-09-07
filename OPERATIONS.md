@@ -6,10 +6,10 @@ Practical day-to-day commands for running, testing, and maintaining this project
 
 ## Environments at a glance
 
-| Environment | Database | Redis | Env file | Started with |
-|---|---|---|---|---|
-| Local dev | Docker Postgres (`footloose-postgres`) | Docker Redis (`footloose-redis`) | `.env` | `pnpm run dev` |
-| Local test | Docker Postgres (`footloose_test` DB) | Docker Redis | `.env.test` | `pnpm test` |
+| Environment | Database                               | Redis                            | Env file    | Started with   |
+| ----------- | -------------------------------------- | -------------------------------- | ----------- | -------------- |
+| Local dev   | Docker Postgres (`footloose-postgres`) | Docker Redis (`footloose-redis`) | `.env`      | `pnpm run dev` |
+| Local test  | Docker Postgres (`footloose_test` DB)  | Docker Redis                     | `.env.test` | `pnpm test`    |
 
 | Local prod-mode | **Real Supabase** | **Real Upstash** | `.env.production` | `pnpm run start:prod` |
 
@@ -20,19 +20,23 @@ Practical day-to-day commands for running, testing, and maintaining this project
 ## Daily start-of-day procedure
 
 **If you ended the previous day with `docker compose stop`** (containers still exist, just paused — the normal case):
+
 ```bash
 cd ~/Videos/PROJECTS/footloose/api
 docker compose start postgres redis
 docker ps
 ```
+
 `start` resumes existing containers — faster than recreating them.
 
 **If you ended the previous day with `docker compose down`** (containers were removed, only volumes remain), or this is a fresh machine:
+
 ```bash
 cd ~/Videos/PROJECTS/footloose/api
 docker compose up -d postgres redis
 docker ps
 ```
+
 `up -d` creates and starts containers fresh, reattaching to the existing named volumes so data is preserved either way.
 
 Wait until both show `(healthy)` in `docker ps` output before running the app or tests.
@@ -53,20 +57,22 @@ pnpm run dev
 Then choose one:
 
 **Option A — `stop` (recommended for a normal end-of-day):** pauses containers without removing them. Fastest to resume next day (`docker compose start postgres redis`).
+
 ```bash
 docker compose stop
 ```
 
 **Option B — `down`: removes containers but keeps volumes/data intact.** Slightly slower to resume (`docker compose up -d postgres redis` recreates them), but frees up a bit more system resources if you won't touch the project for a while.
+
 ```bash
 docker compose down
 ```
 
-| You ran | Data kept? | Resume with |
-|---|---|---|
-| `docker compose stop` | Yes | `docker compose start postgres redis` |
-| `docker compose down` | Yes | `docker compose up -d postgres redis` |
-| `docker compose down -v` | **No — deletes volumes** | N/A, starting fresh |
+| You ran                  | Data kept?               | Resume with                           |
+| ------------------------ | ------------------------ | ------------------------------------- |
+| `docker compose stop`    | Yes                      | `docker compose start postgres redis` |
+| `docker compose down`    | Yes                      | `docker compose up -d postgres redis` |
+| `docker compose down -v` | **No — deletes volumes** | N/A, starting fresh                   |
 
 Only `docker volume rm` or `docker compose down -v` actually deletes data — avoid those unless you specifically want a clean slate.
 
@@ -97,9 +103,11 @@ docker exec footloose-postgres psql -U postgres -d footloose_dev -c "SELECT coun
 pnpm test -- auth.test.js
 docker exec footloose-postgres psql -U postgres -d footloose_dev -c "SELECT count(*) FROM \"user\";"
 ```
+
 If the `footloose_dev` count changes after a test run, something's leaking — tests should only ever write to `footloose_test`.
 
 **Lint/format, same as CI runs:**
+
 ```bash
 pnpm run lint
 pnpm run format:check
@@ -149,6 +157,7 @@ docker exec footloose-postgres psql -U postgres -d footloose_dev -c "\d table_na
 ```
 
 For production, use Supabase's **SQL Editor** instead:
+
 ```sql
 SELECT column_name, data_type, is_nullable
 FROM information_schema.columns
@@ -245,7 +254,7 @@ curl http://localhost:3000/api/auth/me -b cookies.txt
 - **`npm` vs `pnpm`** — this project has no `package-lock.json`, only `pnpm-lock.yaml`. Never run `npm install`/`npm ci` — always `pnpm`.
 - **TDZ shadowing** — never destructure a query result into a variable with the same name as an imported Drizzle table in the same statement (`const [user] = await db...from(user)` throws).
 - **Zod v4** — error details are on `.issues`, not `.errors`. `error.errors` throws `undefined is not iterable`.
-- **`db.execute(sql\`...\`)` results are plain arrays** under `postgres-js` (this project's driver) — no `.rows` wrapper like `pg`/node-postgres. Never write `result.rows`.
+- **`db.execute(sql\`...\`)`results are plain arrays** under`postgres-js`(this project's driver) — no`.rows`wrapper like`pg`/node-postgres. Never write `result.rows`.
 - **Decimal columns return as strings** from Drizzle — always `parseFloat()` before arithmetic.
 - **Dotenv doesn't override by default** — if you need a specific env file to win over anything loaded earlier, pass `override: true` explicitly.
 - **`varchar(20)` on `booking_reference`** — any custom prefix must stay short; the format `FA-YYYY-NNNNNN` uses the full budget.

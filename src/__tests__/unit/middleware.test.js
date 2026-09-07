@@ -5,7 +5,6 @@ describe('Error Middleware', () => {
   let mockReq;
   let mockRes;
   let mockNext;
-  let mockLogger;
 
   beforeEach(() => {
     mockReq = {
@@ -19,11 +18,6 @@ describe('Error Middleware', () => {
     };
 
     mockNext = jest.fn();
-
-    // Mock logger
-    mockLogger = {
-      error: jest.fn(),
-    };
   });
 
   describe('errorHandler', () => {
@@ -214,24 +208,10 @@ describe('Auth Middleware', () => {
 });
 
 describe('Cache Middleware', () => {
-  let mockReq;
-  let mockRes;
-  let mockNext;
-
-  beforeEach(() => {
-    mockReq = {
-      method: 'GET',
-      originalUrl: '/api/tours',
-    };
-
-    mockRes = {
-      json: jest.fn(),
-      send: jest.fn(),
-    };
-
-    mockNext = jest.fn();
-  });
-
+  // No fixtures here on purpose: every test below is a placeholder, and the
+  // request/response mocks that used to be built for them were never read.
+  // Real coverage for this middleware lives in the integration suites, which
+  // exercise it against a live Redis.
   it('should cache GET requests', () => {
     // Cache middleware tests would require mocking Redis
     expect(true).toBe(true);

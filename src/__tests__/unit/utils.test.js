@@ -3,7 +3,6 @@ import { withRetry } from '#utils/dbRetry.js';
 
 describe('Cache Utility', () => {
   let mockRedis;
-  let Cache;
 
   beforeEach(() => {
     // Mock Redis client

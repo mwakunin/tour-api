@@ -283,11 +283,10 @@ export const handleMpesaCallback = async (callbackData) => {
         (item) => item.Name === 'PhoneNumber'
       )?.Value;
 
-      // Both writes in one transaction: separately, a failure between them
-      // left the payment completed while the booking still read pending —
-      // money taken, booking unconfirmed, and nothing to reconcile it against.
-      // The UPDATE is also conditional on the payment not already being
-      // completed, so a retried callback claims nothing and settles nothing.
+      // All three writes in one transaction: the payment claim, the booking
+      // confirmation, and the settlement that records the money in the ledger.
+      // The UPDATE is conditional on the payment not already being completed,
+      // so a retried callback claims nothing and settles nothing.
       const [completedPayment] = await withTenantDb(async (tx) => {
         const updated = await tx
           .update(payments)
@@ -314,6 +313,17 @@ export const handleMpesaCallback = async (callbackData) => {
               updated_at: new Date(),
             })
             .where(eq(bookings.id, payment.booking_id));
+
+          // Settled here rather than after the commit. Outside, a ledger
+          // failure left a completed payment and a confirmed booking with no
+          // settlement — permanently, because the next callback sees
+          // 'completed', claims nothing and skips the settlement again. The
+          // earlier reasoning for keeping it out ("a ledger failure must not
+          // roll back a payment the customer already made") does not hold:
+          // rolling the record back does not un-take the money, it means
+          // Safaricom retries the callback until the books agree, which is
+          // the only outcome that ends with them agreeing.
+          await recordBookingSettlement({ payment: updated[0] });
         }
         return updated;
       });
@@ -325,12 +335,6 @@ export const handleMpesaCallback = async (callbackData) => {
         });
         return { success: true, message: 'Payment already processed' };
       }
-
-      // Money has moved: record it in the ledger and spend it against the
-      // booking's receivable. Deliberately outside the transaction above so a
-      // ledger failure cannot roll back a payment the customer already made.
-      // Never throws.
-      await recordBookingSettlement({ payment: completedPayment });
 
       // ✅ Get complete booking with tour details for email
       const booking = await withTenantDb((tx) =>

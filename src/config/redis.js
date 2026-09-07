@@ -3,8 +3,8 @@ import Redis from 'ioredis';
 import logger from './logger.js';
 
 const isDocker = process.env.IS_DOCKER === 'true';
-const redisUrl = isDocker 
-  ? process.env.DOCKER_REDIS_URL 
+const redisUrl = isDocker
+  ? process.env.DOCKER_REDIS_URL
   : process.env.REDIS_URL;
 
 const redis = new Redis(redisUrl, {

@@ -64,7 +64,14 @@ export default [
   },
   prettier, // ✅ Add this at the end to disable conflicting rules
   {
-    files: ['**/__tests__/**/*.js', '**/*.test.js', '**/*.spec.js'],
+    // jest.setup.js sits at the repository root and matched none of these
+    // globs, so its beforeAll/afterAll/afterEach read as undefined globals.
+    files: [
+      '**/__tests__/**/*.js',
+      '**/*.test.js',
+      '**/*.spec.js',
+      'jest.setup.js',
+    ],
     languageOptions: {
       globals: {
         describe: 'readonly',
@@ -80,6 +87,11 @@ export default [
     },
     rules: {
       'no-unused-expressions': 'off',
+      // Mock factories are written `jest.fn(async () => value)` so they return
+      // a promise like the function they replace, and jest's setup hooks have
+      // the same shape. There is nothing for them to await, so the rule only
+      // fires on code that is correct as written. It stays on everywhere else.
+      'require-await': 'off',
     },
   },
   {

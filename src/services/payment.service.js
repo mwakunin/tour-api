@@ -210,33 +210,6 @@ export const confirmBankTransfer = async (
       throw new Error('This booking has already been confirmed as paid');
     }
 
-    // Conditional on payment_status still being pending. The check above read
-    // the booking earlier in the request, so two admins confirming the same
-    // bank transfer at once both passed it and both inserted a payment. The
-    // UPDATE is the guard: whoever changes the row owns the confirmation.
-    const [updatedBooking] = await withTenantDb((tx) =>
-      tx
-        .update(bookings)
-        .set({
-          payment_status: 'paid',
-          status: 'confirmed',
-          confirmed_at: new Date(),
-          updated_at: new Date(),
-        })
-        .where(
-          and(eq(bookings.id, bookingId), ne(bookings.payment_status, 'paid'))
-        )
-        .returning()
-    );
-
-    if (!updatedBooking) {
-      // Another caller got there first. Stopping here rather than throwing:
-      // the booking is confirmed, which is what the caller wanted.
-      logger.info('Bank transfer already confirmed, skipping', { bookingId });
-      return { alreadyConfirmed: true };
-    }
-
-    // Create payment record
     const paymentRecord = {
       tenant_id: currentTenantId(),
       id: crypto.randomUUID(),
@@ -253,17 +226,48 @@ export const confirmBankTransfer = async (
       updated_at: new Date(),
     };
 
-    try {
-      await withTenantDb((tx) => tx.insert(payments).values(paymentRecord));
+    // The confirmation, the payment record and the settlement share one
+    // transaction. Split, a failure after the booking committed left it paid
+    // and confirmed with no payment row and no ledger entry -- and left it that
+    // way for good, because the next confirmation reads payment_status 'paid',
+    // returns alreadyConfirmed, and retries none of it. The insert failure was
+    // caught and logged as a warning, so the caller was told it worked.
+    const updatedBooking = await withTenantDb(async (tx) => {
+      // Conditional on payment_status still being pending. The check above read
+      // the booking earlier in the request, so two admins confirming the same
+      // bank transfer at once both passed it and both inserted a payment. The
+      // UPDATE is the guard: whoever changes the row owns the confirmation.
+      const [row] = await tx
+        .update(bookings)
+        .set({
+          payment_status: 'paid',
+          status: 'confirmed',
+          confirmed_at: new Date(),
+          updated_at: new Date(),
+        })
+        .where(
+          and(eq(bookings.id, bookingId), ne(bookings.payment_status, 'paid'))
+        )
+        .returning();
+
+      if (!row) return null;
+
+      await tx.insert(payments).values(paymentRecord);
 
       // Money has moved: record it and spend it against the receivable.
       await recordBookingSettlement({
         payment: { ...paymentRecord, completed_at: new Date() },
-        booking: updatedBooking,
+        booking: row,
       });
-    } catch (paymentError) {
-      logger.warn('Failed to create payment record:', paymentError);
-      // Continue even if payment record fails
+
+      return row;
+    });
+
+    if (!updatedBooking) {
+      // Another caller got there first. Stopping here rather than throwing:
+      // the booking is confirmed, which is what the caller wanted.
+      logger.info('Bank transfer already confirmed, skipping', { bookingId });
+      return { alreadyConfirmed: true };
     }
 
     // Invalidate cache

@@ -11,7 +11,10 @@ This file gives Claude Code the context it needs to work effectively in this rep
 - **Runtime:** Node.js, Express
 - **Package manager:** `pnpm` — **never `npm`**. This project has no `package-lock.json`, only `pnpm-lock.yaml`. `npm ci`/`npm install` will fail or create an inconsistent state. Always use `pnpm install`, `pnpm run <script>`, `pnpm test`.
 - **ORM:** Drizzle ORM (`drizzle-kit` for migrations)
-- **Database:** PostgreSQL 16 (Docker: `postgres:16-alpine`)
+- **Database:** PostgreSQL 16 (Docker: `postgres:16-alpine`). **15 is the
+  hard minimum** — migration 0007's column-scoped `ON DELETE SET NULL
+(category_id)` does not parse on 14 or older, so an older production server
+  fails partway through the migration run rather than at startup.
 - **Cache/sessions:** Redis 7 (Docker: `redis:7-alpine`)
 - **Auth:** Better Auth (`better-auth` package) — **not** Kinde, not raw express-session. Migrated off Kinde; any lingering `KINDE_*` env vars or references are dead and should be removed on sight.
 - **Validation:** Zod
@@ -38,6 +41,7 @@ pnpm run format:check         # prettier check
 ```
 
 Full test command under the hood (for reference, don't need to type this manually — `pnpm test` already runs it):
+
 ```bash
 NODE_ENV=test NODE_OPTIONS='--experimental-vm-modules' jest --runInBand --detectOpenHandles
 ```
@@ -55,7 +59,8 @@ Databases: `tourops_dev` and `tourops_test`, same Postgres container, different 
 
 **Host ports are shifted off footloose's** so both stacks can run at once: API `3100` (was 3000), Postgres `5437`, Redis `6382`. Inside the Docker network the services still use 3000/5432/6379 — only the host-side mappings and the non-Docker `DATABASE_URL`/`REDIS_URL` changed.
 
-**Known env-loading gotcha:** `src/__tests__/setup.js` must load `.env.test` with `dotenv.config({ path: '.env.test', override: true })` — the `override: true` is required. Without it, if anything upstream already called `import 'dotenv/config'` (which loads plain `.env`), dotenv's default behavior is to *not* overwrite already-set variables, so `DATABASE_URL` silently stays pointed at `tourops_dev` even when `NODE_ENV=test`. This exact bug caused test runs to pollute the dev database for a while — always verify with a before/after row count check if touching this file:
+**Known env-loading gotcha:** `src/__tests__/setup.js` must load `.env.test` with `dotenv.config({ path: '.env.test', override: true })` — the `override: true` is required. Without it, if anything upstream already called `import 'dotenv/config'` (which loads plain `.env`), dotenv's default behavior is to _not_ overwrite already-set variables, so `DATABASE_URL` silently stays pointed at `tourops_dev` even when `NODE_ENV=test`. This exact bug caused test runs to pollute the dev database for a while — always verify with a before/after row count check if touching this file:
+
 ```bash
 docker exec tourops-postgres psql -U postgres -d tourops_test -c "SELECT count(*) FROM \"user\";"
 ```
@@ -134,7 +139,7 @@ callback.** Nested `withTenantDb` calls reuse the ambient transaction.
 **One deliberate schema/snapshot divergence.** `blog_posts_category_tenant_fk`
 is written by hand in migration 0007 as `ON DELETE SET NULL (category_id)` —
 the column-scoped form Postgres 15+ supports. A plain `ON DELETE SET NULL` is
-*accepted* at definition time but fails at DELETE time, because it would try
+_accepted_ at definition time but fails at DELETE time, because it would try
 to null `tenant_id`, which is `NOT NULL`; the bug would only surface the first
 time somebody deleted a blog category in production. Drizzle cannot express the
 column list, so its snapshot records a plain `set null`. Do not "fix" this by
@@ -145,6 +150,7 @@ regenerating the statement.
 ## Known gotchas / patterns to watch for
 
 **1. Temporal Dead Zone (TDZ) variable shadowing.** A recurring bug pattern found multiple times in this codebase: destructuring a query result into a variable with the same name as an imported Drizzle table, then referencing the table in the same statement before the local variable is assigned:
+
 ```javascript
 // ❌ throws "Cannot access 'user' before initialization"
 const [user] = await db.select().from(user).where(eq(user.id, id));
@@ -152,9 +158,11 @@ const [user] = await db.select().from(user).where(eq(user.id, id));
 // ✅ correct
 const [foundUser] = await db.select().from(user).where(eq(user.id, id));
 ```
+
 Grep for this pattern (`const [x] = await db....from(x)` where `x` matches an imported table name) if debugging a "Cannot access X before initialization" error.
 
-**2. Jest + native ESM mocking.** Because tests run under `--experimental-vm-modules`, the classic `jest.mock()` does **not** reliably intercept ESM imports — it's designed for the CommonJS/Babel transform pipeline. Use `jest.unstable_mockModule()` instead, and anything that transitively imports the mocked module must use dynamic `await import()` placed *after* the mock is registered:
+**2. Jest + native ESM mocking.** Because tests run under `--experimental-vm-modules`, the classic `jest.mock()` does **not** reliably intercept ESM imports — it's designed for the CommonJS/Babel transform pipeline. Use `jest.unstable_mockModule()` instead, and anything that transitively imports the mocked module must use dynamic `await import()` placed _after_ the mock is registered:
+
 ```javascript
 jest.unstable_mockModule('#services/mpesa.service.js', () => ({
   initiateSTKPush: jest.fn(async (...) => ({ ... })),
@@ -168,17 +176,18 @@ const { default: app } = await import('../../app.js');
 
 **3. Drizzle `decimal` columns return as strings.** Any column defined as `decimal('x', { precision, scale })` comes back from Postgres as a JS string, not a number. Always `parseFloat()` before doing arithmetic (e.g. `tour.price_amount` from the `tours` table).
 
-**4. Better Auth user IDs are opaque strings, not integers.** Any leftover `z.number()` validation on a `user_id` field, or any `varchar`/`integer` column typed for the old Kinde/integer-ID era, will break. Better Auth generates random alphanumeric string IDs (e.g. `bd4ze9e4FM101GdIgz5o1eGTMibVBXHs`). Check both the Zod schema layer *and* the actual Postgres column type when debugging ID-related validation or insert failures — they can disagree independently.
+**4. Better Auth user IDs are opaque strings, not integers.** Any leftover `z.number()` validation on a `user_id` field, or any `varchar`/`integer` column typed for the old Kinde/integer-ID era, will break. Better Auth generates random alphanumeric string IDs (e.g. `bd4ze9e4FM101GdIgz5o1eGTMibVBXHs`). Check both the Zod schema layer _and_ the actual Postgres column type when debugging ID-related validation or insert failures — they can disagree independently.
 
 **5. Booking reference format.** `booking_reference` column is `varchar(20)`. The generator (`generateBookingReferenceSimple` in `src/models/booking.model.js`) produces `FA-YYYY-XXXXXX` (~14-16 chars) — stay well under 20 if ever changing the format. A previous version used a longer `BOLDAFRICAS-YYYY-NNNNNN` prefix that silently exceeded the column limit and caused every booking insert to fail with an opaque DB error.
 
 **6. Tour pricing: seasonal periods OR a flat price, never neither.** `tours.pricing_periods` (JSONB array) replaced the old `pricing_tiers` + `validity_period` columns. Each period is `{label?, start_date, end_date, pricing_tiers: [{pax, price_per_person, compare_at_price?, total?, currency}]}` with day-precision dates that may span a year boundary (23 Dec – 2 Jan), at least one tier each, and **no overlaps** (rejected at validation). `price_amount`/`price_currency` are **nullable** and used only when `pricing_periods` is empty (flat-priced transfers/day trips) — so branch on `pricing_periods.length`, and never assume `price_amount` is non-null.
 
 Three rules that are easy to get wrong:
+
 - **Prices are charged exactly as entered.** `price_per_person` is what the customer pays; nothing multiplies it. `compare_at_price` (and `compare_at_amount` for flat tours) is an optional struck-through "was" figure, **display only**, and must exceed the charged price. If you find yourself writing `price * (1 - discount/100)` anywhere, that is the bug this model was built to remove — the admin used to have to work backwards from the price they wanted to charge.
-- **`tours.discount_percentage` is DERIVED and read-only.** `createTour`/`updateTour` compute it via `computeHeadlineDiscount()` (the largest saving across all tiers) and write it; client-supplied values are ignored. It is kept as a real column purely so `getDeals` can filter/sort on it without a JSONB subquery. `updateTour` recomputes it from the *merged* row after the patch, since a patch may touch only the periods or only the flat compare-at.
+- **`tours.discount_percentage` is DERIVED and read-only.** `createTour`/`updateTour` compute it via `computeHeadlineDiscount()` (the largest saving across all tiers) and write it; client-supplied values are ignored. It is kept as a real column purely so `getDeals` can filter/sort on it without a JSONB subquery. `updateTour` recomputes it from the _merged_ row after the patch, since a patch may touch only the periods or only the flat compare-at.
 - **Booking price resolves by the trip's START DATE only** (no proration). If no period covers it, reject and direct the customer to a custom quote — don't silently fall back to the flat price.
-- **Tier selection is server-authoritative.** `resolveTierForGroupSize` picks the exact pax match, else the closest tier *at or below* the group size (a group of 3 against 1/2/4/6 tiers pays the 2-pax rate). A client-supplied `selected_tier_index` is only validated for *agreement* with that result — it never determines the price, or a client could pick a cheaper tier.
+- **Tier selection is server-authoritative.** `resolveTierForGroupSize` picks the exact pax match, else the closest tier _at or below_ the group size (a group of 3 against 1/2/4/6 tiers pays the 2-pax rate). A client-supplied `selected_tier_index` is only validated for _agreement_ with that result — it never determines the price, or a client could pick a cheaper tier.
 
 All the percent-off arithmetic lives in one place, `getTierSavings()`, mirrored on the client in `src/lib/utils/pricing.ts`. Badges, strikethroughs and "Save X" figures all derive from it.
 

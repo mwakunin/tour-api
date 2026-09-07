@@ -2,6 +2,13 @@
 # ============================================
 name: Lint and Format Check
 
+# The summary step posts its result as a PR comment, which the default token
+# cannot do without this -- every run ended in "Resource not accessible by
+# integration" after the checks themselves had already finished.
+permissions:
+  contents: read
+  pull-requests: write
+
 on:
   push:
     branches:
