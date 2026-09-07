@@ -225,6 +225,57 @@ describe('Counterparty API Integration Tests', () => {
       expect(response.body.data.notes).toBe('Prefers email');
     });
 
+    it('judges a patch on the record it produces, not on the patch', async () => {
+      const { body } = await adminAgent
+        .post('/api/counterparties')
+        .send(supplier());
+      track(body);
+
+      // {"type":"agent"} on its own says nothing about a commission rate, so a
+      // check against the patch alone passes and stores an agent that earns
+      // nothing — invisible until somebody reconciles a payable that should
+      // have existed.
+      const response = await adminAgent
+        .patch(`/api/counterparties/${body.data.id}`)
+        .send({ type: 'agent' })
+        .expect(400);
+
+      expect(JSON.stringify(response.body.details)).toMatch(
+        /commission_rate_bps/
+      );
+    });
+
+    it('refuses a commission rate patched onto a supplier', async () => {
+      const { body } = await adminAgent
+        .post('/api/counterparties')
+        .send(supplier());
+      track(body);
+
+      const response = await adminAgent
+        .patch(`/api/counterparties/${body.data.id}`)
+        .send({ commission_rate_bps: 500 })
+        .expect(400);
+
+      expect(JSON.stringify(response.body.details)).toMatch(
+        /only applies to an agent/
+      );
+    });
+
+    it('allows the type and the rate to change together', async () => {
+      const { body } = await adminAgent
+        .post('/api/counterparties')
+        .send(supplier());
+      track(body);
+
+      const response = await adminAgent
+        .patch(`/api/counterparties/${body.data.id}`)
+        .send({ type: 'agent', commission_rate_bps: 1000 })
+        .expect(200);
+
+      expect(response.body.data.type).toBe('agent');
+      expect(response.body.data.commission_rate_bps).toBe(1000);
+    });
+
     it('404s for an unknown id', async () => {
       await adminAgent
         .patch('/api/counterparties/00000000-0000-0000-0000-0000000000aa')

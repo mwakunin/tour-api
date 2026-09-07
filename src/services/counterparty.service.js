@@ -13,6 +13,7 @@
 import { and, count, desc, eq, ilike, or } from 'drizzle-orm';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { counterparties } from '#models/money.model.js';
+import { validateCounterpartyMerged } from '#validations/counterparty.validation.js';
 import logger from '#config/logger.js';
 
 const NOT_FOUND = 'Counterparty not found';
@@ -93,8 +94,24 @@ export const createCounterparty = async (validated) => {
 };
 
 export const updateCounterparty = async (id, validated) => {
-  const [updated] = await withTenantDb((tx) =>
-    tx
+  const updated = await withTenantDb(async (tx) => {
+    // Read, merge, validate, write — in one transaction, and with the row
+    // locked, so the state being judged is the state being written. The cross
+    // field rules are about a whole counterparty, and a patch is not one: on
+    // its own {"type":"agent"} says nothing about a commission rate, and
+    // {"commission_rate_bps":500} says nothing about the type.
+    const [current] = await tx
+      .select()
+      .from(counterparties)
+      .where(eq(counterparties.id, id))
+      .limit(1)
+      .for('update');
+
+    if (!current) throw new Error(NOT_FOUND);
+
+    validateCounterpartyMerged({ ...current, ...validated });
+
+    const [row] = await tx
       .update(counterparties)
       .set({
         ...validated,
@@ -102,8 +119,10 @@ export const updateCounterparty = async (id, validated) => {
         updated_at: new Date(),
       })
       .where(eq(counterparties.id, id))
-      .returning()
-  );
+      .returning();
+
+    return row;
+  });
 
   if (!updated) throw new Error(NOT_FOUND);
 

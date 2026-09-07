@@ -630,7 +630,13 @@ export const allocate = ({
     let accrualBaseCents = baseAmountCents;
     let accrualRateId = fxRateId;
 
-    if (obligation.fx_rate_id && obligation.fx_rate_id !== fxRateId) {
+    // Applies whenever the obligation has an accrual rate, including when the
+    // settlement resolves to the same rate row. Skipping it there looked like a
+    // safe shortcut -- same rate, same answer -- but the telescoping is not
+    // about the rate differing, it is about rounding each instalment
+    // separately. On the same rate, three parts of a 100001-cent obligation
+    // still rounded to one cent less than the single accrual conversion.
+    if (obligation.fx_rate_id) {
       const [accrualRate] = await tx
         .select({ id: fx_rates.id, rate_ppm: fx_rates.rate_ppm })
         .from(fx_rates)
@@ -638,19 +644,21 @@ export const allocate = ({
         .limit(1);
 
       if (accrualRate) {
-        accrualBaseCents = applyRate(
-          amountCents,
-          accrualRate,
-          `${obligation.currency} at the accrual rate`
-        );
+        // Converted on the CUMULATIVE cleared amount and differenced, not on
+        // this allocation alone. Rounding each part separately does not sum to
+        // the whole: three 1-cent allocations at 0.4 each convert to 0, 0, 0
+        // while the 3-cent accrual converted to 1, leaving a cent in the
+        // receivable after it was fully paid. Taking the delta between the
+        // cumulative conversions telescopes to exactly the accrued base,
+        // whatever the rate and however the payments were split.
+        const label = `${obligation.currency} at the accrual rate`;
+        const clearedBefore = obligation.amount_cents - obligationLeft;
+        accrualBaseCents =
+          applyRate(clearedBefore + amountCents, accrualRate, label) -
+          applyRate(clearedBefore, accrualRate, label);
         accrualRateId = accrualRate.id;
       }
     }
-
-    // What the rate moved by, between accrual and settlement, on this amount.
-    // A realised gain or loss: the money arrived, and it was worth more or
-    // less in the operator's own currency than when it was booked.
-    const fxDifferenceCents = baseAmountCents - accrualBaseCents;
 
     const cashAccount = CASH_ACCOUNT[settlement.method] ?? 'cash_other';
     const legs =
@@ -688,17 +696,37 @@ export const allocate = ({
             },
           ];
 
-    if (fxDifferenceCents !== 0) {
+    // Taken from what the legs actually leave over, rather than re-derived
+    // from the two rates. The residue has the opposite sign for a payable --
+    // its obligation leg is positive and its cash leg negative, the reverse of
+    // a receivable -- and a single hardcoded sign was therefore right in one
+    // direction and doubled the imbalance in the other, so postLedger rejected
+    // every payable allocation whose rate had moved. Reading the residue
+    // cannot get that backwards.
+    const residueCents = legs.reduce((sum, l) => sum + l.baseAmountCents, 0);
+
+    if (residueCents !== 0) {
+      // Two different things can leave a residue, and they are not the same
+      // fact about the business. On the same rate it is rounding: the
+      // settlement side converts each instalment, the obligation side
+      // converts the running total, and the two disagree by a cent. On
+      // different rates it is a realised gain or loss -- the money was worth
+      // more or less in the operator's own currency than when it was booked.
+      // Both accounts have been in the enum since 0006 waiting for a writer.
+      const residueAccount =
+        accrualRateId === fxRateId ? 'rounding' : 'fx_gain_loss';
+
       // Denominated in base currency, where the amount and the base amount are
-      // the same figure: an FX gain has no amount in the transaction currency.
-      // That also satisfies ledger_entries_amount_cents_non_zero, which a leg
-      // carrying a zero transaction amount would violate.
+      // the same figure: neither a rounding difference nor an FX gain has an
+      // amount in the transaction currency. That also satisfies
+      // ledger_entries_amount_cents_non_zero, which a leg carrying a zero
+      // transaction amount would violate.
       const baseCurrency = await baseCurrencyOf(tx, currentTenantId());
       legs.push({
-        account: 'fx_gain_loss',
-        amountCents: -fxDifferenceCents,
+        account: residueAccount,
+        amountCents: -residueCents,
         currency: baseCurrency,
-        baseAmountCents: -fxDifferenceCents,
+        baseAmountCents: -residueCents,
         fxRateId: null,
       });
     }

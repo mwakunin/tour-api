@@ -78,6 +78,17 @@ const crossFieldRules = (data, ctx) => {
 export const counterpartyCreateSchema =
   counterpartySchema.superRefine(crossFieldRules);
 
+// The same rules against a whole record rather than a request body.
+//
+// A PATCH carries only what changed, so the rules cannot be applied to it
+// directly: {"type":"agent"} alone says nothing about a commission rate, and
+// {"commission_rate_bps":500} alone says nothing about the type. Either would
+// pass a check on the patch and leave the stored record in a state the create
+// path would have refused. The service merges the patch over the current row
+// and validates that.
+export const counterpartyMergedSchema =
+  counterpartySchema.superRefine(crossFieldRules);
+
 // Omitted and redeclared rather than .partial(), which keeps the create
 // schema's defaults — a PATCH that never mentioned default_currency or
 // is_active would otherwise reset them to 'KES' and true. The same trap
@@ -108,5 +119,7 @@ export const validateCounterpartyCreate = (data) =>
   counterpartyCreateSchema.parse(data);
 export const validateCounterpartyUpdate = (data) =>
   counterpartyUpdateSchema.parse(data);
+export const validateCounterpartyMerged = (data) =>
+  counterpartyMergedSchema.parse(data);
 export const validateCounterpartyQuery = (data) =>
   counterpartyQuerySchema.parse(data);

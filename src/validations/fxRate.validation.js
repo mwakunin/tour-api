@@ -20,12 +20,22 @@ const rateString = z
   .refine((v) => Number(v) > 0, 'Rate must be greater than zero')
   .refine((v) => Number(v) < 1_000_000_000, 'Rate is implausibly large');
 
-// Day precision, matching the column. A rate is a fact about a day, not an
-// instant — nobody reconciles to the second.
+// Day precision, matching the column: a rate is a fact about a day, not an
+// instant, and nobody reconciles to the second.
+//
+// The regex fixes the shape and the round-trip fixes the day. Date.parse
+// accepts 2025-02-30 and rolls it forward to 2025-03-02, so a shape check and
+// a parse check together still let an impossible date through, and the rate
+// would be filed under a day nobody chose.
 const isoDate = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, 'as_of must be YYYY-MM-DD')
-  .refine((v) => !Number.isNaN(Date.parse(v)), 'as_of is not a real date');
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Date must be YYYY-MM-DD')
+  .refine((v) => {
+    const parsed = new Date(`${v}T00:00:00Z`);
+    return (
+      !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === v
+    );
+  }, 'Date is not a real calendar day');
 
 export const fxRateCreateSchema = z
   .object({

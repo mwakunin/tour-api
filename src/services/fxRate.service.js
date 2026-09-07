@@ -162,11 +162,17 @@ export const resolveFxRate = async ({
  */
 export const removeFxRate = (id) =>
   withTenantDb(async (tx) => {
+    // Locked before counting. The foreign key does not hold anything across
+    // the gap between the count below and the delete, so without this an
+    // allocation running concurrently could post a ledger entry against this
+    // rate in between — and ON DELETE SET NULL would then quietly strip the
+    // reference from an entry that had just been written.
     const [existing] = await tx
       .select({ id: fx_rates.id })
       .from(fx_rates)
       .where(eq(fx_rates.id, id))
-      .limit(1);
+      .limit(1)
+      .for('update');
 
     if (!existing) throw new Error(NOT_FOUND);
 

@@ -462,6 +462,100 @@ describe('money service', () => {
       expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
     });
 
+    it('books FX on a payable too, not just a receivable', async () => {
+      await loadRate('2026-11-01', 130_000_000);
+      await loadRate('2026-11-20', 135_000_000);
+
+      // A payable's legs are the mirror of a receivable's: the obligation leg
+      // is positive and the cash leg negative. The residue therefore has the
+      // opposite sign, and an FX leg with a single hardcoded sign doubled the
+      // imbalance instead of cancelling it -- postLedger rejected the
+      // allocation outright. Every test above is a receivable, so none of them
+      // could have caught it.
+      const obligation = await asTenant(() =>
+        money.createObligation({
+          direction: 'payable',
+          kind: 'full',
+          sourceType: 'supplier_invoice',
+          sourceId: BOOKING,
+          amountCents: 100000,
+          currency: 'USD',
+          dueOn: '2026-11-01',
+          description: 'Mara Serena',
+        })
+      );
+
+      const settlement = await asTenant(() =>
+        money.recordSettlement({
+          direction: 'out',
+          method: 'bank_transfer',
+          amountCents: 100000,
+          currency: 'USD',
+          externalReference: 'PAY-FX',
+          occurredAt: new Date('2026-11-20T09:00:00Z'),
+        })
+      );
+
+      await asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: settlement.id,
+          amountCents: 100000,
+        })
+      );
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      expect(baseTotalFor(legs, 'accounts_payable')).toBe(0);
+      expect(baseTotalFor(legs, 'cash_bank')).toBe(-13500000);
+      // Paying 5.00 a dollar more than it was booked at is a loss.
+      expect(baseTotalFor(legs, 'fx_gain_loss')).toBe(500000);
+      expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
+    });
+
+    it('clears exactly when the payment arrives in parts', async () => {
+      // A rate whose thirds do not divide evenly: converting each instalment
+      // on its own rounds three times and loses what the single accrual
+      // conversion kept, so the receivable would not reach zero.
+      await loadRate('2026-11-01', 133_333_333);
+
+      const obligation = await usdReceivable(100001, '2026-11-01');
+      const accrued = obligation.amount_cents;
+
+      for (const part of [33333, 33334, 33334]) {
+        const settlement = await usdCashIn(
+          part,
+          new Date('2026-11-01T09:00:00Z')
+        );
+        await asTenant(() =>
+          money.allocate({
+            obligationId: obligation.id,
+            settlementId: settlement.id,
+            amountCents: part,
+          })
+        );
+      }
+
+      expect(accrued).toBe(100001);
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      // Raised once, cleared in three parts, and still exactly zero.
+      expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+
+      // The settlement side converted each instalment and the obligation side
+      // converted the running total, so the two disagree by a cent. That is a
+      // rounding difference, not a rate movement, and it is booked as one.
+      expect(baseTotalFor(legs, 'rounding')).toBe(1);
+      expect(legs.filter((l) => l.account === 'fx_gain_loss')).toHaveLength(0);
+
+      expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
+    });
+
     it('leaves a same-currency obligation untouched', async () => {
       const obligation = await receivable(420000);
       const settlement = await cashIn(420000);

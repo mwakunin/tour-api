@@ -131,6 +131,17 @@ describe('FX Rate API Integration Tests', () => {
       expect(response.status).toBe(400);
     });
 
+    it('refuses a date the calendar does not have', async () => {
+      // Date.parse rolls 2025-02-30 forward to 2025-03-02, so without a
+      // round-trip check the rate is filed under a day nobody chose.
+      for (const as_of of ['2025-02-30', '2025-13-01', '2025-00-10']) {
+        const response = await adminAgent
+          .post('/api/fx-rates')
+          .send(rateBody({ as_of }));
+        expect(response.status).toBe(400);
+      }
+    });
+
     it('refuses identical base and quote currencies', async () => {
       const response = await adminAgent
         .post('/api/fx-rates')
