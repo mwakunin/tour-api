@@ -141,6 +141,22 @@ export const obligations = pgTable(
 
     counterparty_id: uuid('counterparty_id'),
 
+    // The rate this obligation's accrual was booked at.
+    //
+    // Kept so a settlement can clear the obligation at the rate it was raised
+    // at. Valued instead at the settlement-day rate, the debit that raised the
+    // receivable and the credit that clears it do not cancel in base currency,
+    // and the difference stays in accounts_receivable after the obligation is
+    // fully paid — a residue that grows with every cross-currency booking and
+    // reconciles to nothing.
+    //
+    // Null when the obligation is already in the tenant's base currency, and
+    // on any obligation raised before this column existed. Both fall back to
+    // converting the settlement side alone, which is the previous behaviour.
+    fx_rate_id: uuid('fx_rate_id').references(() => fx_rates.id, {
+      onDelete: 'set null',
+    }),
+
     // Polymorphic backlink to whatever produced this obligation — 'booking',
     // 'supplier_invoice', 'commission'. Deliberately not a foreign key and
     // deliberately not an enum: this is the seam where the portable module

@@ -148,6 +148,13 @@
       "when": 1788805825018,
       "tag": "0020_wandering_invaders",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788806380215,
+      "tag": "0021_tense_wilson_fisk",
+      "breakpoints": true
     }
   ]
 }

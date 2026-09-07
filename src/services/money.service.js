@@ -104,6 +104,46 @@ export const findRate = async (tx, { tenantId, from, to, onDate }) => {
  * inside plausible KES amounts — 1e10 cents at 129.45 is already past
  * MAX_SAFE_INTEGER, and the failure is silent rounding rather than an error.
  */
+/**
+ * Applies a stored rate to an amount, in integer arithmetic throughout.
+ *
+ * Extracted so the accrual side and the settlement side of an allocation
+ * convert identically. Two copies of this would drift, and the drift would
+ * surface as an entry group that refuses to balance for reasons nobody can
+ * reconstruct.
+ */
+const applyRate = (amountCents, rate, label) => {
+  // rate_ppm is bigint in Postgres but mapped as a number, so a value past the
+  // safe-integer range arrives already rounded and BigInt() would faithfully
+  // convert the wrong figure. The output check below cannot catch that: a
+  // rounded rate still produces a perfectly safe-looking result.
+  if (!Number.isSafeInteger(rate.rate_ppm)) {
+    throw new Error(
+      `[money] fx_rate ${rate.id} has rate_ppm ${rate.rate_ppm}, outside the ` +
+        'safe integer range -- it cannot be read losslessly through the ' +
+        "current 'number' column mapping."
+    );
+  }
+
+  const converted =
+    (BigInt(Math.trunc(amountCents)) * BigInt(rate.rate_ppm) + PPM / 2n) / PPM;
+
+  // The arithmetic above is BigInt, but the column is mapped as a JS number,
+  // so the result has to land inside the safe-integer range or the ledger
+  // silently records a figure nobody chose. assertAmountCents guards what goes
+  // in; this guards what conversion made of it.
+  const result = Number(converted);
+  if (!Number.isSafeInteger(result)) {
+    throw new Error(
+      `[money] converting ${amountCents} ${label} overflows the safe integer ` +
+        `range (got ${converted}). The money columns are bigint in Postgres ` +
+        'but mapped as numbers; moving them to bigint mode is the fix if ' +
+        'amounts this large are real.'
+    );
+  }
+  return result;
+};
+
 export const toBaseCents = async (
   tx,
   { tenantId, amountCents, currency, onDate }
@@ -127,34 +167,10 @@ export const toBaseCents = async (
     );
   }
 
-  // rate_ppm is bigint in Postgres but mapped as a number, so a value past the
-  // safe-integer range arrives already rounded and BigInt() would faithfully
-  // convert the wrong figure. The output check below cannot catch that: a
-  // rounded rate still produces a perfectly safe-looking result.
-  if (!Number.isSafeInteger(rate.rate_ppm)) {
-    throw new Error(
-      `[money] fx_rate ${rate.id} has rate_ppm ${rate.rate_ppm}, outside the ` +
-        'safe integer range -- it cannot be read losslessly through the ' +
-        "current 'number' column mapping."
-    );
-  }
-
-  const converted =
-    (BigInt(Math.trunc(amountCents)) * BigInt(rate.rate_ppm) + PPM / 2n) / PPM;
-  // The arithmetic above is BigInt, but the column is mapped as a JS number,
-  // so the result has to land inside the safe-integer range or the ledger
-  // silently records a figure nobody chose. assertAmountCents guards what goes
-  // in; this guards what conversion made of it.
-  const baseAmountCents = Number(converted);
-  if (!Number.isSafeInteger(baseAmountCents)) {
-    throw new Error(
-      `[money] converting ${amountCents} ${currency} to ${base} overflows the ` +
-        `safe integer range (got ${converted}). The money columns are bigint ` +
-        'in Postgres but mapped as numbers; moving them to bigint mode is the ' +
-        'fix if amounts this large are real.'
-    );
-  }
-  return { baseAmountCents, fxRateId: rate.id };
+  return {
+    baseAmountCents: applyRate(amountCents, rate, `${currency}->${base}`),
+    fxRateId: rate.id,
+  };
 };
 
 // ============= LEDGER =============
@@ -258,6 +274,10 @@ export const createObligation = ({
         currency,
         due_on: dueOn,
         description,
+        // The rate this accrual was booked at, so a settlement can clear the
+        // obligation at the same rate rather than the settlement-day one.
+        // Null for a base-currency obligation, which needs no conversion.
+        fx_rate_id: fxRateId,
       })
       .returning();
 
@@ -597,6 +617,41 @@ export const allocate = ({
       onDate,
     });
 
+    // The obligation side clears at the rate its accrual was booked at, not
+    // the settlement-day rate. Valued at the settlement rate, the debit that
+    // raised the receivable and the credit that clears it do not cancel in
+    // base currency: each entry group still balances on its own, so nothing
+    // complains, but the difference stays in accounts_receivable after the
+    // obligation is fully paid and reconciles to nothing.
+    //
+    // Falls back to the settlement rate -- the previous behaviour -- for a
+    // base-currency obligation, which has no stored rate, and for one raised
+    // before obligations.fx_rate_id existed.
+    let accrualBaseCents = baseAmountCents;
+    let accrualRateId = fxRateId;
+
+    if (obligation.fx_rate_id && obligation.fx_rate_id !== fxRateId) {
+      const [accrualRate] = await tx
+        .select({ id: fx_rates.id, rate_ppm: fx_rates.rate_ppm })
+        .from(fx_rates)
+        .where(eq(fx_rates.id, obligation.fx_rate_id))
+        .limit(1);
+
+      if (accrualRate) {
+        accrualBaseCents = applyRate(
+          amountCents,
+          accrualRate,
+          `${obligation.currency} at the accrual rate`
+        );
+        accrualRateId = accrualRate.id;
+      }
+    }
+
+    // What the rate moved by, between accrual and settlement, on this amount.
+    // A realised gain or loss: the money arrived, and it was worth more or
+    // less in the operator's own currency than when it was booked.
+    const fxDifferenceCents = baseAmountCents - accrualBaseCents;
+
     const cashAccount = CASH_ACCOUNT[settlement.method] ?? 'cash_other';
     const legs =
       settlement.direction === 'in'
@@ -612,8 +667,8 @@ export const allocate = ({
               account: 'accounts_receivable',
               amountCents: -amountCents,
               currency: settlement.currency,
-              baseAmountCents: -baseAmountCents,
-              fxRateId,
+              baseAmountCents: -accrualBaseCents,
+              fxRateId: accrualRateId,
             },
           ]
         : [
@@ -621,8 +676,8 @@ export const allocate = ({
               account: 'accounts_payable',
               amountCents,
               currency: settlement.currency,
-              baseAmountCents,
-              fxRateId,
+              baseAmountCents: accrualBaseCents,
+              fxRateId: accrualRateId,
             },
             {
               account: cashAccount,
@@ -632,6 +687,21 @@ export const allocate = ({
               fxRateId,
             },
           ];
+
+    if (fxDifferenceCents !== 0) {
+      // Denominated in base currency, where the amount and the base amount are
+      // the same figure: an FX gain has no amount in the transaction currency.
+      // That also satisfies ledger_entries_amount_cents_non_zero, which a leg
+      // carrying a zero transaction amount would violate.
+      const baseCurrency = await baseCurrencyOf(tx, currentTenantId());
+      legs.push({
+        account: 'fx_gain_loss',
+        amountCents: -fxDifferenceCents,
+        currency: baseCurrency,
+        baseAmountCents: -fxDifferenceCents,
+        fxRateId: null,
+      });
+    }
 
     await postLedger(tx, {
       legs,
