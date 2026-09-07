@@ -13,7 +13,7 @@
 
 import { and, count, desc, eq } from 'drizzle-orm';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
-import { fx_rates, ledger_entries } from '#models/money.model.js';
+import { fx_rates, ledger_entries, obligations } from '#models/money.model.js';
 import { findRate } from '#services/money.service.js';
 import { decimalToPpm, ppmToDecimal } from '#utils/money.js';
 import logger from '#config/logger.js';
@@ -176,12 +176,31 @@ export const removeFxRate = (id) =>
 
     if (!existing) throw new Error(NOT_FOUND);
 
-    const [used] = await tx
+    const [usedByLedger] = await tx
       .select({ total: count() })
       .from(ledger_entries)
       .where(eq(ledger_entries.fx_rate_id, id));
 
-    if (Number(used?.total ?? 0) > 0) throw new Error(IN_USE);
+    if (Number(usedByLedger?.total ?? 0) > 0) throw new Error(IN_USE);
+
+    // Obligations reference it too, and for a reason the ledger check does not
+    // cover: obligations.fx_rate_id is the rate a settlement clears the
+    // obligation at, and it is also ON DELETE SET NULL. Nulling it sends
+    // allocate back to the settlement-rate fallback, which is exactly the
+    // residue in accounts_receivable that storing the accrual rate exists to
+    // prevent.
+    //
+    // Today this is belt and braces: createObligation writes the rate onto the
+    // obligation and posts ledger legs carrying it in the same transaction, so
+    // the check above already catches every case. That coupling is implicit
+    // and nothing enforces it, and a future path that raises an obligation
+    // without posting legs would silently reopen the bug.
+    const [usedByObligations] = await tx
+      .select({ total: count() })
+      .from(obligations)
+      .where(eq(obligations.fx_rate_id, id));
+
+    if (Number(usedByObligations?.total ?? 0) > 0) throw new Error(IN_USE);
 
     // Shared rates are invisible to UPDATE and DELETE under 0018's policies,
     // so this only ever removes a rate this tenant loaded. A shared one

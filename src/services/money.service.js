@@ -150,7 +150,7 @@ export const toBaseCents = async (
 ) => {
   const base = await baseCurrencyOf(tx, tenantId);
   if (currency === base)
-    return { baseAmountCents: amountCents, fxRateId: null };
+    return { baseAmountCents: amountCents, fxRateId: null, ratePpm: null };
 
   const rate = await findRate(tx, {
     tenantId,
@@ -170,6 +170,11 @@ export const toBaseCents = async (
   return {
     baseAmountCents: applyRate(amountCents, rate, `${currency}->${base}`),
     fxRateId: rate.id,
+    // The rate itself, not just which row it came from. Two rows can hold the
+    // same rate — a tenant loading its own copy of a shared reference rate —
+    // and for deciding whether a rate has actually moved, the value is the
+    // question and the row identity is not.
+    ratePpm: rate.rate_ppm,
   };
 };
 
@@ -610,7 +615,11 @@ export const allocate = ({
     const onDate = (settlement.occurred_at ?? new Date())
       .toISOString()
       .slice(0, 10);
-    const { baseAmountCents, fxRateId } = await toBaseCents(tx, {
+    const {
+      baseAmountCents,
+      fxRateId,
+      ratePpm: settlementRatePpm,
+    } = await toBaseCents(tx, {
       tenantId: currentTenantId(),
       amountCents,
       currency: settlement.currency,
@@ -629,6 +638,7 @@ export const allocate = ({
     // before obligations.fx_rate_id existed.
     let accrualBaseCents = baseAmountCents;
     let accrualRateId = fxRateId;
+    let accrualRatePpm = settlementRatePpm;
 
     // Applies whenever the obligation has an accrual rate, including when the
     // settlement resolves to the same rate row. Skipping it there looked like a
@@ -657,6 +667,7 @@ export const allocate = ({
           applyRate(clearedBefore + amountCents, accrualRate, label) -
           applyRate(clearedBefore, accrualRate, label);
         accrualRateId = accrualRate.id;
+        accrualRatePpm = accrualRate.rate_ppm;
       }
     }
 
@@ -713,8 +724,13 @@ export const allocate = ({
       // different rates it is a realised gain or loss -- the money was worth
       // more or less in the operator's own currency than when it was booked.
       // Both accounts have been in the enum since 0006 waiting for a writer.
+      // Compared by value, not by row id. A tenant that loads its own copy of
+      // a shared reference rate has two rows holding the same number, and the
+      // accrual and the settlement can legitimately resolve to different ones.
+      // Nothing has moved in that case, so a rounding cent is a rounding cent
+      // and calling it a realised gain would be a lie about the business.
       const residueAccount =
-        accrualRateId === fxRateId ? 'rounding' : 'fx_gain_loss';
+        accrualRatePpm === settlementRatePpm ? 'rounding' : 'fx_gain_loss';
 
       // Denominated in base currency, where the amount and the base amount are
       // the same figure: neither a rounding difference nor an FX gain has an

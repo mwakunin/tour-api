@@ -556,6 +556,62 @@ describe('money service', () => {
       expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
     });
 
+    it('calls a residue rounding when the rate value has not moved', async () => {
+      // Two rows holding the same number: a shared reference rate, and the
+      // tenant's own copy loaded later. The accrual resolves to one and the
+      // settlement to the other, so their ids differ while nothing has
+      // actually moved. Comparing ids called the rounding cent a realised FX
+      // gain, which is a lie about the business.
+      const SHARED = '00000000-0000-0000-0000-0000000000fe';
+      await db.insert(fx_rates).values({
+        id: SHARED,
+        tenant_id: null,
+        base_currency: 'USD',
+        quote_currency: 'KES',
+        rate_ppm: 133_333_333,
+        as_of: '2026-12-01',
+        source: 'shared-same-value',
+      });
+
+      try {
+        await loadRate('2026-12-05', 133_333_333); // identical value, own row
+
+        // Due on the 1st: only the shared rate exists on that date.
+        const obligation = await usdReceivable(100001, '2026-12-01');
+        expect(obligation.fx_rate_id).toBe(SHARED);
+
+        // Settled on the 5th, which resolves to the tenant's own row.
+        for (const part of [33333, 33334, 33334]) {
+          const settlement = await usdCashIn(
+            part,
+            new Date('2026-12-05T09:00:00Z')
+          );
+          await asTenant(() =>
+            money.allocate({
+              obligationId: obligation.id,
+              settlementId: settlement.id,
+              amountCents: part,
+            })
+          );
+        }
+
+        const legs = await asTenant(() =>
+          withTenantDb((tx) => tx.select().from(ledger_entries))
+        );
+
+        expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+        expect(baseTotalFor(legs, 'rounding')).toBe(1);
+        expect(legs.filter((l) => l.account === 'fx_gain_loss')).toHaveLength(
+          0
+        );
+        expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
+      } finally {
+        // Shared rates outlive this suite's tenant cleanup, which only removes
+        // its own rows.
+        await db.delete(fx_rates).where(eq(fx_rates.id, SHARED));
+      }
+    });
+
     it('leaves a same-currency obligation untouched', async () => {
       const obligation = await receivable(420000);
       const settlement = await cashIn(420000);

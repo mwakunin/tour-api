@@ -10,7 +10,7 @@ import { eq, inArray } from 'drizzle-orm';
 import app from '../../app.js';
 import { db, initDatabase } from '#config/database.js';
 import redis from '#config/redis.js';
-import { fx_rates, ledger_entries } from '#models/money.model.js';
+import { fx_rates, ledger_entries, obligations } from '#models/money.model.js';
 import {
   createAuthenticatedAgent,
   createAuthenticatedAdminAgent,
@@ -267,6 +267,48 @@ describe('FX Rate API Integration Tests', () => {
 
       // Still there, and still explaining the entry that points at it.
       await adminAgent.get(`/api/fx-rates/${body.data.id}`).expect(200);
+    });
+
+    it('refuses to delete a rate an obligation was accrued at', async () => {
+      const { body } = await load();
+
+      // An obligation with an accrual rate and no ledger entry referencing it.
+      // createObligation always writes both together, so the ledger check
+      // above already covers every case the API can produce -- but that is an
+      // implicit coupling, and obligations.fx_rate_id is ON DELETE SET NULL.
+      // Nulling it would send allocate back to the settlement-rate fallback,
+      // which is the receivable residue that storing the accrual rate exists
+      // to prevent.
+      const [obligation] = await db
+        .insert(obligations)
+        .values({
+          tenant_id: SEED_TENANT_ID,
+          direction: 'receivable',
+          kind: 'full',
+          source_type: 'booking',
+          source_id: '00000000-0000-0000-0000-0000000000d1',
+          amount_cents: 100000,
+          currency: 'USD',
+          status: 'open',
+          fx_rate_id: body.data.id,
+        })
+        .returning();
+
+      try {
+        const response = await adminAgent
+          .delete(`/api/fx-rates/${body.data.id}`)
+          .expect(409);
+        expect(response.body.error).toMatch(/referenced by ledger entries/);
+
+        // Still there, and the obligation still knows what it was accrued at.
+        const [stillSet] = await db
+          .select()
+          .from(obligations)
+          .where(eq(obligations.id, obligation.id));
+        expect(stillSet.fx_rate_id).toBe(body.data.id);
+      } finally {
+        await db.delete(obligations).where(eq(obligations.id, obligation.id));
+      }
     });
 
     it('404s for an unknown id', async () => {
