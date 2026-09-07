@@ -20,12 +20,84 @@ import {
   currentTenantId,
   inTenantTransaction,
 } from '#config/tenantContext.js';
-import { obligations } from '#models/schema.js';
+import { obligations, counterparties } from '#models/schema.js';
 import { decimalToCents } from '#utils/money.js';
 import logger from '#config/logger.js';
 import * as money from './money.service.js';
 
 const SOURCE = 'booking';
+
+// Basis points to money, in integer arithmetic. 1250 bps of 125000 cents is
+// 15625, and the rate is stored as an integer precisely so this multiplication
+// never goes near a float — a commission is somebody's income, and a rounding
+// error in it is a rounding error in what an agent is paid.
+//
+// Rounds half up at the last cent rather than truncating, so the operator does
+// not systematically underpay by a fraction on every booking.
+const commissionCentsFor = (totalCents, rateBps) =>
+  Number((BigInt(totalCents) * BigInt(rateBps) + 5000n) / 10000n);
+
+/**
+ * Raises the agent's commission for a booking, as a payable.
+ *
+ * A no-op for a direct booking, which is most of them: no agent, no
+ * commission, no obligation. Also a no-op, loudly, for an agent with no rate
+ * configured — validation refuses to create one, but a rate cleared afterwards
+ * would otherwise silently raise a zero payable that nobody notices until
+ * reconciliation.
+ *
+ * Due on the departure date rather than the booking date: the agent has earned
+ * it when the trip runs, and paying commission on a trip that has not happened
+ * yet is how an operator ends up chasing refunds from agents.
+ */
+export const raiseAgentCommission = async (booking) => {
+  if (!booking.agent_id) return null;
+
+  const [agent] = await withTenantDb((tx) =>
+    tx
+      .select()
+      .from(counterparties)
+      .where(eq(counterparties.id, booking.agent_id))
+      .limit(1)
+  );
+
+  if (!agent) {
+    logger.error('[bookingLedger] booking names an agent that does not exist', {
+      bookingId: booking.id,
+      agentId: booking.agent_id,
+    });
+    return null;
+  }
+
+  if (agent.commission_rate_bps === null) {
+    logger.error('[bookingLedger] agent has no commission rate configured', {
+      bookingId: booking.id,
+      agentId: agent.id,
+    });
+    return null;
+  }
+
+  const totalCents = decimalToCents(booking.total_price);
+  if (!totalCents || totalCents <= 0) return null;
+
+  const amountCents = commissionCentsFor(totalCents, agent.commission_rate_bps);
+
+  // A rate low enough to round to nothing on a small booking. An obligation of
+  // zero is rejected by assertAmountCents anyway, and there is nothing to owe.
+  if (amountCents <= 0) return null;
+
+  return money.createObligation({
+    direction: 'payable',
+    kind: 'commission',
+    counterpartyId: agent.id,
+    sourceType: SOURCE,
+    sourceId: booking.id,
+    amountCents,
+    currency: booking.currency,
+    dueOn: new Date(booking.start_date).toISOString().slice(0, 10),
+    description: `Commission ${agent.name} ${booking.booking_reference}`,
+  });
+};
 
 /**
  * Raises the receivable for a booking.
@@ -170,7 +242,7 @@ export const recordBookingSettlement = async ({ payment, booking }) => {
  * alone — money that actually arrived is a refund question, not a bookkeeping
  * one, and silently unwinding it here would hide a real balance.
  */
-export const voidBookingReceivables = async (bookingId) => {
+export const voidBookingObligations = async (bookingId) => {
   try {
     const open = await withTenantDb((tx) =>
       tx
@@ -181,7 +253,17 @@ export const voidBookingReceivables = async (bookingId) => {
             eq(obligations.tenant_id, currentTenantId()),
             eq(obligations.source_type, SOURCE),
             eq(obligations.source_id, bookingId),
-            eq(obligations.direction, 'receivable'),
+            // Every obligation the booking raised, in either direction: the
+            // customer's receivable and the agent's commission both stop being
+            // owed when the trip is cancelled. Deliberately not filtered by
+            // direction — a separate function for the payable side would be
+            // one more pair to keep in step, and the pair that drifts is the
+            // one nobody remembers to update.
+            //
+            // Supplier invoices are untouched: they carry source_type
+            // 'supplier_invoice', and whether a lodge still charges for a
+            // cancelled booking is their cancellation policy, not ours to
+            // assume.
             eq(obligations.status, 'open')
           )
         )

@@ -4,7 +4,8 @@ import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import { tenants } from '#models/tenant.model.js';
 import {
   raiseBookingReceivable,
-  voidBookingReceivables,
+  raiseAgentCommission,
+  voidBookingObligations,
 } from './bookingLedger.service.js';
 import {
   bookings,
@@ -216,6 +217,15 @@ export const createBooking = async (data) => {
     // accrual did; that is a reconciliation problem, not a reason to reject a
     // customer who has committed.
     await raiseBookingReceivable(completeBooking ?? booking);
+
+    // And the agent's commission, if the booking came through one. Same
+    // reasoning: an agent's payable is the operator's problem to reconcile,
+    // not the customer's problem to be rejected over.
+    try {
+      await raiseAgentCommission(completeBooking ?? booking);
+    } catch (commissionError) {
+      logger.error('Failed to raise agent commission:', commissionError);
+    }
 
     // Invalidate relevant caches
     try {
@@ -471,7 +481,7 @@ export const updateBookingStatus = async (id, status) => {
       // changes. Anything already settled against it is left alone — that is
       // a refund question, not a bookkeeping one.
       if (row && status === 'cancelled') {
-        await voidBookingReceivables(row.id);
+        await voidBookingObligations(row.id);
       }
 
       return row;
@@ -607,7 +617,7 @@ export const cancelBooking = async (id) => {
       // has to happen here too — otherwise a booking cancelled through this
       // route keeps showing as money owed. Safe to repeat: it only touches
       // rows still 'open'.
-      if (row) await voidBookingReceivables(row.id);
+      if (row) await voidBookingObligations(row.id);
 
       return row;
     });

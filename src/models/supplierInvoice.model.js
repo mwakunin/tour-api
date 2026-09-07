@@ -32,6 +32,7 @@ import {
 import { relations } from 'drizzle-orm';
 import { tenants } from './tenant.model.js';
 import { counterparties } from './money.model.js';
+import { bookings } from './booking.model.js';
 
 export const supplierInvoices = pgTable(
   'supplier_invoices',
@@ -50,6 +51,16 @@ export const supplierInvoices = pgTable(
     // When the supplier issued it. Payment terms count from here, not from
     // when somebody got round to entering it.
     issued_on: date('issued_on').notNull(),
+
+    // Which trip this cost belongs to, when it belongs to one. A lodge
+    // invoice for a specific safari is attributable; a monthly insurance
+    // premium is not, and stays null rather than being forced onto a booking
+    // it does not belong to.
+    //
+    // Nullable and ON DELETE SET NULL: the debt is real whether or not the
+    // booking it was attributed to still exists, so losing the attribution
+    // must not take the invoice with it.
+    booking_id: uuid('booking_id'),
 
     notes: text('notes'),
 
@@ -88,6 +99,21 @@ export const supplierInvoices = pgTable(
       columns: [table.tenant_id, table.counterparty_id],
       foreignColumns: [counterparties.tenant_id, counterparties.id],
     }).onDelete('restrict'),
+
+    // Safe to declare here: this file imports booking.model.js and nothing in
+    // that direction imports back, so there is no cycle. bookings cannot
+    // reference counterparties the same way for exactly that reason — see the
+    // note on bookings.agent_id.
+    bookingFk: foreignKey({
+      name: 'supplier_invoices_booking_tenant_fk',
+      columns: [table.tenant_id, table.booking_id],
+      foreignColumns: [bookings.tenant_id, bookings.id],
+    }).onDelete('set null'),
+
+    bookingIdx: index('supplier_invoices_booking_idx').on(
+      table.tenant_id,
+      table.booking_id
+    ),
   })
 );
 
@@ -97,6 +123,10 @@ export const supplierInvoicesRelations = relations(
     tenant: one(tenants, {
       fields: [supplierInvoices.tenant_id],
       references: [tenants.id],
+    }),
+    booking: one(bookings, {
+      fields: [supplierInvoices.booking_id],
+      references: [bookings.id],
     }),
     counterparty: one(counterparties, {
       fields: [supplierInvoices.counterparty_id],

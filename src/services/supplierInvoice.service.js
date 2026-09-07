@@ -40,6 +40,7 @@ const addDays = (isoDate, days) => {
 const shape = (row) => ({
   id: row.id,
   counterparty_id: row.counterparty_id,
+  booking_id: row.booking_id ?? null,
   supplier_name: row.supplier_name ?? null,
   invoice_number: row.invoice_number,
   issued_on: row.issued_on,
@@ -70,6 +71,7 @@ const outstandingExpr = sql`${obligations.amount_cents} - coalesce(sum(${allocat
 const invoiceSelection = {
   id: supplierInvoices.id,
   counterparty_id: supplierInvoices.counterparty_id,
+  booking_id: supplierInvoices.booking_id,
   invoice_number: supplierInvoices.invoice_number,
   issued_on: supplierInvoices.issued_on,
   notes: supplierInvoices.notes,
@@ -120,6 +122,7 @@ export const createSupplierInvoice = async (validated) => {
     amount,
     currency,
     due_on,
+    booking_id = null,
     notes = null,
   } = validated;
 
@@ -145,6 +148,7 @@ export const createSupplierInvoice = async (validated) => {
           counterparty_id,
           invoice_number,
           issued_on,
+          booking_id,
           notes,
           // After the spread-equivalent fields, so caller input cannot set it.
           tenant_id: currentTenantId(),

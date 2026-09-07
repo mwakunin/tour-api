@@ -44,6 +44,16 @@ export const supplierInvoiceCreateSchema = z.object({
   currency: z.enum(CURRENCIES).optional(),
   due_on: isoDate.optional(),
 
+  // Which trip this cost belongs to, when it belongs to one. A lodge bill for
+  // a specific safari is attributable and counts against that booking's
+  // margin; a monthly insurance premium is not, and stays null rather than
+  // being forced onto a trip it has nothing to do with.
+  booking_id: z
+    .string()
+    .uuid('booking_id must be a UUID')
+    .optional()
+    .nullable(),
+
   notes: z.string().max(2000).optional().nullable(),
 });
 

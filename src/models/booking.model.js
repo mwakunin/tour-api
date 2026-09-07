@@ -59,6 +59,19 @@ export const bookings = pgTable(
     currency: currencyEnum('currency').notNull(),
 
     // Customer info
+    // The trade agent who brought this booking, if it came through one. A
+    // counterparty of type 'agent'; their commission is raised as a payable
+    // against it when the booking is created.
+    //
+    // Declared without a Drizzle .references() or foreignKey() on purpose.
+    // Doing either means importing counterparties from money.model.js, and
+    // money.model.js imports payment.model.js, which imports this file — a
+    // cycle, evaluated at module load, in exactly the way that produces
+    // "Cannot access X before initialization". The composite foreign key is
+    // written by hand in the migration instead, so Postgres still enforces
+    // that an agent belongs to the same tenant as the booking.
+    agent_id: uuid('agent_id'),
+
     customer_name: text('customer_name').notNull(),
     customer_email: text('customer_email').notNull(),
     customer_phone: text('customer_phone'),
