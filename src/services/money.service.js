@@ -73,7 +73,11 @@ const baseCurrencyOf = async (tx, tenantId) => {
  * A tenant's own rate wins over a shared one for the same date — an operator
  * who books at a contracted rate should not be silently repriced.
  */
-const findRate = async (tx, { tenantId, from, to, onDate }) => {
+// Exported so the FX endpoint can answer "which rate would a conversion on
+// this date use" with the same ordering the conversion itself applies. A
+// second implementation would drift, and the drift would only show as a
+// ledger entry nobody can explain.
+export const findRate = async (tx, { tenantId, from, to, onDate }) => {
   const [rate] = await tx
     .select()
     .from(fx_rates)
@@ -100,13 +104,53 @@ const findRate = async (tx, { tenantId, from, to, onDate }) => {
  * inside plausible KES amounts — 1e10 cents at 129.45 is already past
  * MAX_SAFE_INTEGER, and the failure is silent rounding rather than an error.
  */
+/**
+ * Applies a stored rate to an amount, in integer arithmetic throughout.
+ *
+ * Extracted so the accrual side and the settlement side of an allocation
+ * convert identically. Two copies of this would drift, and the drift would
+ * surface as an entry group that refuses to balance for reasons nobody can
+ * reconstruct.
+ */
+const applyRate = (amountCents, rate, label) => {
+  // rate_ppm is bigint in Postgres but mapped as a number, so a value past the
+  // safe-integer range arrives already rounded and BigInt() would faithfully
+  // convert the wrong figure. The output check below cannot catch that: a
+  // rounded rate still produces a perfectly safe-looking result.
+  if (!Number.isSafeInteger(rate.rate_ppm)) {
+    throw new Error(
+      `[money] fx_rate ${rate.id} has rate_ppm ${rate.rate_ppm}, outside the ` +
+        'safe integer range -- it cannot be read losslessly through the ' +
+        "current 'number' column mapping."
+    );
+  }
+
+  const converted =
+    (BigInt(Math.trunc(amountCents)) * BigInt(rate.rate_ppm) + PPM / 2n) / PPM;
+
+  // The arithmetic above is BigInt, but the column is mapped as a JS number,
+  // so the result has to land inside the safe-integer range or the ledger
+  // silently records a figure nobody chose. assertAmountCents guards what goes
+  // in; this guards what conversion made of it.
+  const result = Number(converted);
+  if (!Number.isSafeInteger(result)) {
+    throw new Error(
+      `[money] converting ${amountCents} ${label} overflows the safe integer ` +
+        `range (got ${converted}). The money columns are bigint in Postgres ` +
+        'but mapped as numbers; moving them to bigint mode is the fix if ' +
+        'amounts this large are real.'
+    );
+  }
+  return result;
+};
+
 export const toBaseCents = async (
   tx,
   { tenantId, amountCents, currency, onDate }
 ) => {
   const base = await baseCurrencyOf(tx, tenantId);
   if (currency === base)
-    return { baseAmountCents: amountCents, fxRateId: null };
+    return { baseAmountCents: amountCents, fxRateId: null, ratePpm: null };
 
   const rate = await findRate(tx, {
     tenantId,
@@ -123,34 +167,15 @@ export const toBaseCents = async (
     );
   }
 
-  // rate_ppm is bigint in Postgres but mapped as a number, so a value past the
-  // safe-integer range arrives already rounded and BigInt() would faithfully
-  // convert the wrong figure. The output check below cannot catch that: a
-  // rounded rate still produces a perfectly safe-looking result.
-  if (!Number.isSafeInteger(rate.rate_ppm)) {
-    throw new Error(
-      `[money] fx_rate ${rate.id} has rate_ppm ${rate.rate_ppm}, outside the ` +
-        'safe integer range -- it cannot be read losslessly through the ' +
-        "current 'number' column mapping."
-    );
-  }
-
-  const converted =
-    (BigInt(Math.trunc(amountCents)) * BigInt(rate.rate_ppm) + PPM / 2n) / PPM;
-  // The arithmetic above is BigInt, but the column is mapped as a JS number,
-  // so the result has to land inside the safe-integer range or the ledger
-  // silently records a figure nobody chose. assertAmountCents guards what goes
-  // in; this guards what conversion made of it.
-  const baseAmountCents = Number(converted);
-  if (!Number.isSafeInteger(baseAmountCents)) {
-    throw new Error(
-      `[money] converting ${amountCents} ${currency} to ${base} overflows the ` +
-        `safe integer range (got ${converted}). The money columns are bigint ` +
-        'in Postgres but mapped as numbers; moving them to bigint mode is the ' +
-        'fix if amounts this large are real.'
-    );
-  }
-  return { baseAmountCents, fxRateId: rate.id };
+  return {
+    baseAmountCents: applyRate(amountCents, rate, `${currency}->${base}`),
+    fxRateId: rate.id,
+    // The rate itself, not just which row it came from. Two rows can hold the
+    // same rate — a tenant loading its own copy of a shared reference rate —
+    // and for deciding whether a rate has actually moved, the value is the
+    // question and the row identity is not.
+    ratePpm: rate.rate_ppm,
+  };
 };
 
 // ============= LEDGER =============
@@ -254,6 +279,10 @@ export const createObligation = ({
         currency,
         due_on: dueOn,
         description,
+        // The rate this accrual was booked at, so a settlement can clear the
+        // obligation at the same rate rather than the settlement-day one.
+        // Null for a base-currency obligation, which needs no conversion.
+        fx_rate_id: fxRateId,
       })
       .returning();
 
@@ -586,12 +615,61 @@ export const allocate = ({
     const onDate = (settlement.occurred_at ?? new Date())
       .toISOString()
       .slice(0, 10);
-    const { baseAmountCents, fxRateId } = await toBaseCents(tx, {
+    const {
+      baseAmountCents,
+      fxRateId,
+      ratePpm: settlementRatePpm,
+    } = await toBaseCents(tx, {
       tenantId: currentTenantId(),
       amountCents,
       currency: settlement.currency,
       onDate,
     });
+
+    // The obligation side clears at the rate its accrual was booked at, not
+    // the settlement-day rate. Valued at the settlement rate, the debit that
+    // raised the receivable and the credit that clears it do not cancel in
+    // base currency: each entry group still balances on its own, so nothing
+    // complains, but the difference stays in accounts_receivable after the
+    // obligation is fully paid and reconciles to nothing.
+    //
+    // Falls back to the settlement rate -- the previous behaviour -- for a
+    // base-currency obligation, which has no stored rate, and for one raised
+    // before obligations.fx_rate_id existed.
+    let accrualBaseCents = baseAmountCents;
+    let accrualRateId = fxRateId;
+    let accrualRatePpm = settlementRatePpm;
+
+    // Applies whenever the obligation has an accrual rate, including when the
+    // settlement resolves to the same rate row. Skipping it there looked like a
+    // safe shortcut -- same rate, same answer -- but the telescoping is not
+    // about the rate differing, it is about rounding each instalment
+    // separately. On the same rate, three parts of a 100001-cent obligation
+    // still rounded to one cent less than the single accrual conversion.
+    if (obligation.fx_rate_id) {
+      const [accrualRate] = await tx
+        .select({ id: fx_rates.id, rate_ppm: fx_rates.rate_ppm })
+        .from(fx_rates)
+        .where(eq(fx_rates.id, obligation.fx_rate_id))
+        .limit(1);
+
+      if (accrualRate) {
+        // Converted on the CUMULATIVE cleared amount and differenced, not on
+        // this allocation alone. Rounding each part separately does not sum to
+        // the whole: three 1-cent allocations at 0.4 each convert to 0, 0, 0
+        // while the 3-cent accrual converted to 1, leaving a cent in the
+        // receivable after it was fully paid. Taking the delta between the
+        // cumulative conversions telescopes to exactly the accrued base,
+        // whatever the rate and however the payments were split.
+        const label = `${obligation.currency} at the accrual rate`;
+        const clearedBefore = obligation.amount_cents - obligationLeft;
+        accrualBaseCents =
+          applyRate(clearedBefore + amountCents, accrualRate, label) -
+          applyRate(clearedBefore, accrualRate, label);
+        accrualRateId = accrualRate.id;
+        accrualRatePpm = accrualRate.rate_ppm;
+      }
+    }
 
     const cashAccount = CASH_ACCOUNT[settlement.method] ?? 'cash_other';
     const legs =
@@ -608,8 +686,8 @@ export const allocate = ({
               account: 'accounts_receivable',
               amountCents: -amountCents,
               currency: settlement.currency,
-              baseAmountCents: -baseAmountCents,
-              fxRateId,
+              baseAmountCents: -accrualBaseCents,
+              fxRateId: accrualRateId,
             },
           ]
         : [
@@ -617,8 +695,8 @@ export const allocate = ({
               account: 'accounts_payable',
               amountCents,
               currency: settlement.currency,
-              baseAmountCents,
-              fxRateId,
+              baseAmountCents: accrualBaseCents,
+              fxRateId: accrualRateId,
             },
             {
               account: cashAccount,
@@ -628,6 +706,46 @@ export const allocate = ({
               fxRateId,
             },
           ];
+
+    // Taken from what the legs actually leave over, rather than re-derived
+    // from the two rates. The residue has the opposite sign for a payable --
+    // its obligation leg is positive and its cash leg negative, the reverse of
+    // a receivable -- and a single hardcoded sign was therefore right in one
+    // direction and doubled the imbalance in the other, so postLedger rejected
+    // every payable allocation whose rate had moved. Reading the residue
+    // cannot get that backwards.
+    const residueCents = legs.reduce((sum, l) => sum + l.baseAmountCents, 0);
+
+    if (residueCents !== 0) {
+      // Two different things can leave a residue, and they are not the same
+      // fact about the business. On the same rate it is rounding: the
+      // settlement side converts each instalment, the obligation side
+      // converts the running total, and the two disagree by a cent. On
+      // different rates it is a realised gain or loss -- the money was worth
+      // more or less in the operator's own currency than when it was booked.
+      // Both accounts have been in the enum since 0006 waiting for a writer.
+      // Compared by value, not by row id. A tenant that loads its own copy of
+      // a shared reference rate has two rows holding the same number, and the
+      // accrual and the settlement can legitimately resolve to different ones.
+      // Nothing has moved in that case, so a rounding cent is a rounding cent
+      // and calling it a realised gain would be a lie about the business.
+      const residueAccount =
+        accrualRatePpm === settlementRatePpm ? 'rounding' : 'fx_gain_loss';
+
+      // Denominated in base currency, where the amount and the base amount are
+      // the same figure: neither a rounding difference nor an FX gain has an
+      // amount in the transaction currency. That also satisfies
+      // ledger_entries_amount_cents_non_zero, which a leg carrying a zero
+      // transaction amount would violate.
+      const baseCurrency = await baseCurrencyOf(tx, currentTenantId());
+      legs.push({
+        account: residueAccount,
+        amountCents: -residueCents,
+        currency: baseCurrency,
+        baseAmountCents: -residueCents,
+        fxRateId: null,
+      });
+    }
 
     await postLedger(tx, {
       legs,

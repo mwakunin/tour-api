@@ -141,6 +141,20 @@
       "when": 1788739846847,
       "tag": "0019_default_sequence_privileges",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1788805825018,
+      "tag": "0020_wandering_invaders",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1788806380215,
+      "tag": "0021_tense_wilson_fisk",
+      "breakpoints": true
     }
   ]
 }

@@ -315,6 +315,327 @@ describe('money service', () => {
     expect(receivableTotal).toBe(0);
   });
 
+  // A cross-currency obligation raised on one day's rate and settled on
+  // another's. createObligation converted at the due-date rate and allocate at
+  // the settlement-date rate, so the debit that raised the receivable and the
+  // credit that cleared it did not cancel in base currency. Each entry group
+  // balanced on its own, so postLedger never complained -- the difference just
+  // stayed in accounts_receivable after the obligation was fully paid.
+  describe('a rate that moves between accrual and settlement', () => {
+    const loadRate = (as_of, ratePpm) =>
+      db.insert(fx_rates).values({
+        tenant_id: TENANT,
+        base_currency: 'USD',
+        quote_currency: 'KES',
+        rate_ppm: ratePpm,
+        as_of,
+        source: 'test',
+      });
+
+    const usdReceivable = (amountCents, dueOn) =>
+      asTenant(() =>
+        money.createObligation({
+          direction: 'receivable',
+          kind: 'full',
+          sourceType: 'booking',
+          sourceId: BOOKING,
+          amountCents,
+          currency: 'USD',
+          dueOn,
+          description: 'USD safari',
+        })
+      );
+
+    const usdCashIn = (amountCents, occurredAt) =>
+      asTenant(() =>
+        money.recordSettlement({
+          direction: 'in',
+          method: 'pesapal',
+          amountCents,
+          currency: 'USD',
+          externalReference: 'RCP-FX',
+          occurredAt,
+        })
+      );
+
+    const baseTotalFor = (legs, account) =>
+      legs
+        .filter((l) => l.account === account)
+        .reduce((sum, l) => sum + l.base_amount_cents, 0);
+
+    it('clears the receivable to zero and books the movement as FX', async () => {
+      await loadRate('2026-11-01', 130_000_000); // 130.00 on the due date
+      await loadRate('2026-11-20', 135_000_000); // 135.00 when it settles
+
+      // USD 1,000.00 due on the 1st, paid in full on the 20th.
+      const obligation = await usdReceivable(100000, '2026-11-01');
+      const settlement = await usdCashIn(
+        100000,
+        new Date('2026-11-20T09:00:00Z')
+      );
+
+      // The accrual rate is kept on the obligation; that is what makes the
+      // clearing entry cancel the raising one.
+      expect(obligation.fx_rate_id).not.toBeNull();
+
+      await asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: settlement.id,
+          amountCents: 100000,
+        })
+      );
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      // Raised at 130 and cleared at 130: nothing left behind.
+      expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+
+      // Cash arrived at 135: USD 1,000 became KES 135,000.
+      expect(baseTotalFor(legs, 'cash_pesapal')).toBe(13500000);
+
+      // The 5.00 a shilling moved, on 1,000 dollars, is a realised gain --
+      // credited, so negative in this sign convention.
+      expect(baseTotalFor(legs, 'fx_gain_loss')).toBe(-500000);
+
+      // And the group still balances, which is what makes all three true at
+      // once rather than two of them.
+      const residue = legs.reduce((sum, l) => sum + l.base_amount_cents, 0);
+      expect(residue).toBe(0);
+    });
+
+    it('books a loss when the rate moves the other way', async () => {
+      await loadRate('2026-11-01', 130_000_000);
+      await loadRate('2026-11-20', 127_000_000); // the shilling strengthened
+
+      const obligation = await usdReceivable(100000, '2026-11-01');
+      const settlement = await usdCashIn(
+        100000,
+        new Date('2026-11-20T09:00:00Z')
+      );
+
+      await asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: settlement.id,
+          amountCents: 100000,
+        })
+      );
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+      expect(baseTotalFor(legs, 'cash_pesapal')).toBe(12700000);
+      // Worth 3,000 less than when it was booked: a debit, so positive.
+      expect(baseTotalFor(legs, 'fx_gain_loss')).toBe(300000);
+      expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
+    });
+
+    it('posts no FX leg when the rate has not moved', async () => {
+      await loadRate('2026-11-01', 130_000_000);
+
+      const obligation = await usdReceivable(100000, '2026-11-01');
+      const settlement = await usdCashIn(
+        100000,
+        new Date('2026-11-10T09:00:00Z')
+      );
+
+      await asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: settlement.id,
+          amountCents: 100000,
+        })
+      );
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      // Same rate on both dates, so there is no gain to record. A zero-amount
+      // leg would violate ledger_entries_amount_cents_non_zero anyway.
+      expect(legs.filter((l) => l.account === 'fx_gain_loss')).toHaveLength(0);
+      expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+    });
+
+    it('books FX on a payable too, not just a receivable', async () => {
+      await loadRate('2026-11-01', 130_000_000);
+      await loadRate('2026-11-20', 135_000_000);
+
+      // A payable's legs are the mirror of a receivable's: the obligation leg
+      // is positive and the cash leg negative. The residue therefore has the
+      // opposite sign, and an FX leg with a single hardcoded sign doubled the
+      // imbalance instead of cancelling it -- postLedger rejected the
+      // allocation outright. Every test above is a receivable, so none of them
+      // could have caught it.
+      const obligation = await asTenant(() =>
+        money.createObligation({
+          direction: 'payable',
+          kind: 'full',
+          sourceType: 'supplier_invoice',
+          sourceId: BOOKING,
+          amountCents: 100000,
+          currency: 'USD',
+          dueOn: '2026-11-01',
+          description: 'Mara Serena',
+        })
+      );
+
+      const settlement = await asTenant(() =>
+        money.recordSettlement({
+          direction: 'out',
+          method: 'bank_transfer',
+          amountCents: 100000,
+          currency: 'USD',
+          externalReference: 'PAY-FX',
+          occurredAt: new Date('2026-11-20T09:00:00Z'),
+        })
+      );
+
+      await asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: settlement.id,
+          amountCents: 100000,
+        })
+      );
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      expect(baseTotalFor(legs, 'accounts_payable')).toBe(0);
+      expect(baseTotalFor(legs, 'cash_bank')).toBe(-13500000);
+      // Paying 5.00 a dollar more than it was booked at is a loss.
+      expect(baseTotalFor(legs, 'fx_gain_loss')).toBe(500000);
+      expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
+    });
+
+    it('clears exactly when the payment arrives in parts', async () => {
+      // A rate whose thirds do not divide evenly: converting each instalment
+      // on its own rounds three times and loses what the single accrual
+      // conversion kept, so the receivable would not reach zero.
+      await loadRate('2026-11-01', 133_333_333);
+
+      const obligation = await usdReceivable(100001, '2026-11-01');
+      const accrued = obligation.amount_cents;
+
+      for (const part of [33333, 33334, 33334]) {
+        const settlement = await usdCashIn(
+          part,
+          new Date('2026-11-01T09:00:00Z')
+        );
+        await asTenant(() =>
+          money.allocate({
+            obligationId: obligation.id,
+            settlementId: settlement.id,
+            amountCents: part,
+          })
+        );
+      }
+
+      expect(accrued).toBe(100001);
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      // Raised once, cleared in three parts, and still exactly zero.
+      expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+
+      // The settlement side converted each instalment and the obligation side
+      // converted the running total, so the two disagree by a cent. That is a
+      // rounding difference, not a rate movement, and it is booked as one.
+      expect(baseTotalFor(legs, 'rounding')).toBe(1);
+      expect(legs.filter((l) => l.account === 'fx_gain_loss')).toHaveLength(0);
+
+      expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
+    });
+
+    it('calls a residue rounding when the rate value has not moved', async () => {
+      // Two rows holding the same number: a shared reference rate, and the
+      // tenant's own copy loaded later. The accrual resolves to one and the
+      // settlement to the other, so their ids differ while nothing has
+      // actually moved. Comparing ids called the rounding cent a realised FX
+      // gain, which is a lie about the business.
+      const SHARED = '00000000-0000-0000-0000-0000000000fe';
+      await db.insert(fx_rates).values({
+        id: SHARED,
+        tenant_id: null,
+        base_currency: 'USD',
+        quote_currency: 'KES',
+        rate_ppm: 133_333_333,
+        as_of: '2026-12-01',
+        source: 'shared-same-value',
+      });
+
+      try {
+        await loadRate('2026-12-05', 133_333_333); // identical value, own row
+
+        // Due on the 1st: only the shared rate exists on that date.
+        const obligation = await usdReceivable(100001, '2026-12-01');
+        expect(obligation.fx_rate_id).toBe(SHARED);
+
+        // Settled on the 5th, which resolves to the tenant's own row.
+        for (const part of [33333, 33334, 33334]) {
+          const settlement = await usdCashIn(
+            part,
+            new Date('2026-12-05T09:00:00Z')
+          );
+          await asTenant(() =>
+            money.allocate({
+              obligationId: obligation.id,
+              settlementId: settlement.id,
+              amountCents: part,
+            })
+          );
+        }
+
+        const legs = await asTenant(() =>
+          withTenantDb((tx) => tx.select().from(ledger_entries))
+        );
+
+        expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+        expect(baseTotalFor(legs, 'rounding')).toBe(1);
+        expect(legs.filter((l) => l.account === 'fx_gain_loss')).toHaveLength(
+          0
+        );
+        expect(legs.reduce((sum, l) => sum + l.base_amount_cents, 0)).toBe(0);
+      } finally {
+        // Shared rates outlive this suite's tenant cleanup, which only removes
+        // its own rows.
+        await db.delete(fx_rates).where(eq(fx_rates.id, SHARED));
+      }
+    });
+
+    it('leaves a same-currency obligation untouched', async () => {
+      const obligation = await receivable(420000);
+      const settlement = await cashIn(420000);
+
+      // No conversion, so no rate to keep and nothing for FX to explain.
+      expect(obligation.fx_rate_id).toBeNull();
+
+      await asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: settlement.id,
+          amountCents: 420000,
+        })
+      );
+
+      const legs = await asTenant(() =>
+        withTenantDb((tx) => tx.select().from(ledger_entries))
+      );
+
+      expect(legs.filter((l) => l.account === 'fx_gain_loss')).toHaveLength(0);
+      expect(baseTotalFor(legs, 'accounts_receivable')).toBe(0);
+    });
+  });
+
   it('refuses to allocate a settlement that has not completed', async () => {
     const obligation = await receivable(100000);
     const pending = await asTenant(() =>

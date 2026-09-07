@@ -141,6 +141,22 @@ export const obligations = pgTable(
 
     counterparty_id: uuid('counterparty_id'),
 
+    // The rate this obligation's accrual was booked at.
+    //
+    // Kept so a settlement can clear the obligation at the rate it was raised
+    // at. Valued instead at the settlement-day rate, the debit that raised the
+    // receivable and the credit that clears it do not cancel in base currency,
+    // and the difference stays in accounts_receivable after the obligation is
+    // fully paid — a residue that grows with every cross-currency booking and
+    // reconciles to nothing.
+    //
+    // Null when the obligation is already in the tenant's base currency, and
+    // on any obligation raised before this column existed. Both fall back to
+    // converting the settlement side alone, which is the previous behaviour.
+    fx_rate_id: uuid('fx_rate_id').references(() => fx_rates.id, {
+      onDelete: 'set null',
+    }),
+
     // Polymorphic backlink to whatever produced this obligation — 'booking',
     // 'supplier_invoice', 'commission'. Deliberately not a foreign key and
     // deliberately not an enum: this is the seam where the portable module
@@ -368,6 +384,25 @@ export const fx_rates = pgTable(
       table.quote_currency,
       table.as_of
     ),
+    // One rate per currency pair per day, per tenant, and one shared rate per
+    // pair per day. findRate orders by as_of DESC then tenant DESC NULLS LAST
+    // and takes the first row, which has no tiebreaker when two rows share a
+    // tenant and a date — so which rate a conversion used came down to
+    // physical row order, and a correction loaded alongside the original could
+    // be ignored indefinitely.
+    //
+    // NULLS NOT DISTINCT because tenant_id is NULL on shared rates: under the
+    // default every NULL is distinct from every other, so the constraint would
+    // simply not apply to the shared ones. Postgres 15+, which 0007 already
+    // requires.
+    tenantPairDateUnique: unique('fx_rates_tenant_pair_date_unique')
+      .on(
+        table.tenant_id,
+        table.base_currency,
+        table.quote_currency,
+        table.as_of
+      )
+      .nullsNotDistinct(),
     ratePositiveCk: check(
       'fx_rates_rate_ppm_positive',
       sql`${table.rate_ppm} > 0`

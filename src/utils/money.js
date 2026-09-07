@@ -41,3 +41,62 @@ export const centsToDecimal = (cents) => {
   const abs = Math.abs(Math.trunc(cents));
   return `${negative ? '-' : ''}${Math.trunc(abs / 100)}.${String(abs % 100).padStart(2, '0')}`;
 };
+
+// FX rates are stored as parts per million: 130.25 KES per USD is 130_250_000.
+// An integer for the same reason amounts are — the rate is multiplied by money,
+// and a float rate puts rounding error into a ledger entry that has to balance.
+const PPM_SCALE = 6;
+
+/**
+ * Exact decimal-string rate to parts per million.
+ *
+ * Digits are parsed rather than multiplied through a float, for the reason
+ * decimalToCents documents: `parseFloat('130.25') * 1e6` is not reliably an
+ * integer, and the error only shows on the one rate where it matters.
+ *
+ * Rates are positive by definition — fx_rates carries a CHECK to that effect —
+ * so a leading minus is rejected rather than carried through.
+ */
+export const decimalToPpm = (value) => {
+  if (value === null || value === undefined) return null;
+
+  const text = String(value).trim();
+  if (!/^\d+(\.\d+)?$/.test(text)) {
+    throw new Error(
+      `[money] not a positive decimal rate: ${JSON.stringify(value)}`
+    );
+  }
+
+  const [whole, fraction = ''] = text.split('.');
+  // Pad one past the scale so the seventh decimal rounds rather than truncates.
+  const padded = fraction.padEnd(PPM_SCALE + 1, '0');
+  const ppm =
+    BigInt(whole) * 1_000_000n +
+    BigInt(padded.slice(0, PPM_SCALE)) +
+    (Number(padded[PPM_SCALE]) >= 5 ? 1n : 0n);
+
+  if (ppm <= 0n) {
+    throw new Error(`[money] rate rounds to zero: ${JSON.stringify(value)}`);
+  }
+
+  const asNumber = Number(ppm);
+  // rate_ppm is bigint in Postgres but mapped as a number, so a rate past the
+  // safe-integer range would be stored already rounded and every conversion
+  // using it would be quietly wrong. Refused at the boundary instead.
+  if (!Number.isSafeInteger(asNumber)) {
+    throw new Error(
+      `[money] rate ${text} exceeds the safe integer range in parts per million`
+    );
+  }
+
+  return asNumber;
+};
+
+/** Parts per million back to a trimmed decimal string, for display. */
+export const ppmToDecimal = (ppm) => {
+  if (ppm === null || ppm === undefined) return null;
+  const whole = Math.trunc(ppm / 1_000_000);
+  const fraction = String(Math.abs(ppm) % 1_000_000).padStart(PPM_SCALE, '0');
+  const trimmed = fraction.replace(/0+$/, '');
+  return trimmed ? `${whole}.${trimmed}` : String(whole);
+};
