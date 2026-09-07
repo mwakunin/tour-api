@@ -123,6 +123,18 @@ export const toBaseCents = async (
     );
   }
 
+  // rate_ppm is bigint in Postgres but mapped as a number, so a value past the
+  // safe-integer range arrives already rounded and BigInt() would faithfully
+  // convert the wrong figure. The output check below cannot catch that: a
+  // rounded rate still produces a perfectly safe-looking result.
+  if (!Number.isSafeInteger(rate.rate_ppm)) {
+    throw new Error(
+      `[money] fx_rate ${rate.id} has rate_ppm ${rate.rate_ppm}, outside the ` +
+        'safe integer range -- it cannot be read losslessly through the ' +
+        "current 'number' column mapping."
+    );
+  }
+
   const converted =
     (BigInt(Math.trunc(amountCents)) * BigInt(rate.rate_ppm) + PPM / 2n) / PPM;
   // The arithmetic above is BigInt, but the column is mapped as a JS number,

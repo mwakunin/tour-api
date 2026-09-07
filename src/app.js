@@ -41,11 +41,20 @@ const app = express();
 //
 // Set TRUSTED_PROXY_HOPS to the number of hops when an ingress that overwrites
 // the header is actually in front (Cloudflare, nginx, Vercel: normally 1).
-const TRUSTED_PROXY_HOPS = Number.parseInt(
-  process.env.TRUSTED_PROXY_HOPS ?? '0',
-  10
-);
-const trustedHops = Number.isNaN(TRUSTED_PROXY_HOPS) ? 0 : TRUSTED_PROXY_HOPS;
+// Anything that is not a non-negative whole number means 0. Number.parseInt
+// alone was not enough: it reads '-1' as -1, which is truthy, so the
+// sanitisation below was skipped and the caller got their forwarded header
+// back -- the exact bypass this block exists to close. It also reads '2abc'
+// as 2, quietly trusting a hop the operator never configured.
+const parseTrustedHops = (raw) => {
+  if (raw === undefined || raw === null || raw === '') return 0;
+  const value = String(raw).trim();
+  if (!/^\d+$/.test(value)) return 0;
+  const hops = Number(value);
+  return Number.isSafeInteger(hops) ? hops : 0;
+};
+
+const trustedHops = parseTrustedHops(process.env.TRUSTED_PROXY_HOPS);
 
 app.set('trust proxy', trustedHops);
 

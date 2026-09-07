@@ -519,6 +519,42 @@ describe('Tour Validation Schemas', () => {
         /either pricing periods or a flat base price/
       );
     });
+
+    // validateTour used to parse with tourSchema, which carried this rule
+    // alongside the pricing one. Moving create onto tourCreateSchema kept the
+    // pricing refinement and dropped this one, so create was the only path
+    // that had the check and it silently lost it.
+    it('should reject an inverted age range', () => {
+      const inverted = {
+        title: 'Inverted Ages',
+        slug: 'inverted-ages',
+        overview:
+          'A detailed overview that comfortably clears the hundred character minimum this schema requires of every tour it accepts.',
+        duration: 3,
+        pricing: { amount: 100, currency: 'USD' },
+        images: ['https://example.com/image1.jpg'],
+        age_restriction: { min_age: 40, max_age: 10 },
+      };
+
+      expect(() => tourCreateSchema.parse(inverted)).toThrow(
+        /Min age must be less than max age/
+      );
+    });
+
+    it('should accept a sensible age range', () => {
+      const sensible = {
+        title: 'Sensible Ages',
+        slug: 'sensible-ages',
+        overview:
+          'A detailed overview that comfortably clears the hundred character minimum this schema requires of every tour it accepts.',
+        duration: 3,
+        pricing: { amount: 100, currency: 'USD' },
+        images: ['https://example.com/image1.jpg'],
+        age_restriction: { min_age: 10, max_age: 40 },
+      };
+
+      expect(() => tourCreateSchema.parse(sensible)).not.toThrow();
+    });
   });
 
   describe('tourQuerySchema', () => {

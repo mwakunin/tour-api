@@ -15,7 +15,11 @@
 
 import { and, eq } from 'drizzle-orm';
 
-import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
+import {
+  withTenantDb,
+  currentTenantId,
+  inTenantTransaction,
+} from '#config/tenantContext.js';
 import { obligations } from '#models/schema.js';
 import { decimalToCents } from '#utils/money.js';
 import logger from '#config/logger.js';
@@ -63,6 +67,13 @@ export const raiseBookingReceivable = async (booking) => {
       description: booking.booking_reference,
     });
   } catch (error) {
+    // Same rule as the settlement path. Outside a transaction the decision
+    // stands: a booking must not fail because its accrual did, since that is a
+    // reconciliation problem rather than a reason to reject a customer who has
+    // committed. Inside one there is no such choice to make -- the transaction
+    // is already unusable, and reporting a skipped accrual would be a lie.
+    if (inTenantTransaction()) throw error;
+
     logger.error('[bookingLedger] failed to raise receivable', {
       bookingId: booking.id,
       error: error.message,
@@ -126,6 +137,14 @@ export const recordBookingSettlement = async ({ payment, booking }) => {
   } catch (error) {
     // 23505 on the settlement index means a concurrent callback recorded this
     // payment first. That is the guard working, not a failure.
+    // Both branches below decide to carry on. That is only a decision the
+    // caller can honour outside a transaction: within one, the statement that
+    // raised this has already aborted it, so "carry on" means every following
+    // statement fails on a dead transaction and the real cause is buried.
+    // Pesapal settles inside the claim's transaction for exactly that
+    // atomicity, so it has to hear about this.
+    if (inTenantTransaction()) throw error;
+
     if (error.cause?.code === '23505') {
       logger.info('[bookingLedger] settlement already recorded for payment', {
         paymentId: payment?.id,

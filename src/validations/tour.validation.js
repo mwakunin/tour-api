@@ -699,6 +699,23 @@ export const tourCreateSchema = z
       message: 'A tour needs either pricing periods or a flat base price',
       path: ['pricing_periods'],
     }
+  )
+  // tourSchema carried this alongside the pricing rule. Moving validateTour
+  // onto tourCreateSchema kept the pricing refinement and silently dropped
+  // this one, so create accepted min_age 40 with max_age 10 and stored the
+  // inverted range. Create is the only path that ever checked it --
+  // tourUpdateSchema never had it.
+  .refine(
+    (data) => {
+      if (data.age_restriction?.min_age && data.age_restriction?.max_age) {
+        return data.age_restriction.min_age < data.age_restriction.max_age;
+      }
+      return true;
+    },
+    {
+      message: 'Min age must be less than max age',
+      path: ['age_restriction'],
+    }
   );
 
 // Query schema (for filtering)

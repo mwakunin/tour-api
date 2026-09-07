@@ -37,6 +37,16 @@ export const runWithTenant = (tenantId, fn) =>
 export const currentTenantId = () => storage.getStore()?.tenantId ?? null;
 
 /**
+ * Whether a tenant transaction is already open on this async context.
+ *
+ * Callers that swallow a database error to keep going need this: inside an
+ * ambient transaction there is nothing to keep going with. A failed statement
+ * aborts the whole PostgreSQL transaction, so every later statement fails too
+ * and the swallow only hides which one was the cause.
+ */
+export const inTenantTransaction = () => Boolean(storage.getStore()?.tx);
+
+/**
  * Runs `fn(tx)` inside a short transaction with `app.tenant_id` set, so the
  * RLS policies from migration 0008 apply.
  *

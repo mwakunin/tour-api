@@ -134,6 +134,13 @@
       "when": 1788732620310,
       "tag": "0018_fx_rates_write_isolation",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1788739846847,
+      "tag": "0019_default_sequence_privileges",
+      "breakpoints": true
     }
   ]
 }

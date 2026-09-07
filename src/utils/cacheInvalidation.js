@@ -110,8 +110,13 @@ export const invalidateBooking = async (
       await cache.del(CacheKeys.tourBookings(tourId));
     }
 
-    // Invalidate stats
+    // Both namespaces. Dashboard counters live under stats:*, but the filtered
+    // booking statistics live under bookings:stats:* and revenue under
+    // bookings:revenue:* -- `stats:*` matches neither, so they were never
+    // cleared here and stayed stale for their full ten minutes.
     await cache.delPattern(CacheKeys.patterns.allStats());
+    await cache.delPattern(CacheKeys.patterns.bookingStats());
+    await cache.delPattern(CacheKeys.patterns.revenueStats());
 
     logger.info('[Cache Invalidation] Booking caches cleared:', {
       bookingId,
@@ -159,7 +164,13 @@ export const invalidateUser = async (userId, email, kindeId) => {
  */
 export const invalidateStats = async () => {
   try {
+    // Both namespaces. Dashboard counters live under stats:*, but the filtered
+    // booking statistics live under bookings:stats:* and revenue under
+    // bookings:revenue:* -- `stats:*` matches neither, so they were never
+    // cleared here and stayed stale for their full ten minutes.
     await cache.delPattern(CacheKeys.patterns.allStats());
+    await cache.delPattern(CacheKeys.patterns.bookingStats());
+    await cache.delPattern(CacheKeys.patterns.revenueStats());
     await cache.delPattern(CacheKeys.patterns.bookingStatsAll());
     logger.info('[Cache Invalidation] All stats caches cleared');
   } catch (error) {

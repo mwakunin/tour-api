@@ -346,8 +346,18 @@ export const listFiles = async ({
           .offset((page - 1) * limit);
 
         // Separate count so the caller can page: rows is only the current
-        // slice. Same transaction as the rows above, so a concurrent upload
-        // cannot make the total disagree with what the caller was handed.
+        // slice.
+        //
+        // Sharing a transaction does NOT make the total agree with the rows,
+        // which the previous comment here claimed. withTenantDb opens at the
+        // default READ COMMITTED, where each statement takes its own snapshot,
+        // so an upload committing between these two queries is visible to one
+        // and not the other. REPEATABLE READ would settle it but cannot be set
+        // from here: withTenantDb has already issued set_config on this
+        // transaction, and SET TRANSACTION ISOLATION LEVEL must precede every
+        // statement. Left alone deliberately -- a file listing whose total is
+        // briefly one out does not justify a stricter isolation level on every
+        // tenant query.
         const [totals] = await tx
           .select({ total: count() })
           .from(files)

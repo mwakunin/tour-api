@@ -166,6 +166,9 @@ const rawCacheKeys = {
     userBookings: (userId) => `bookings:user:${userId}:*`,
     bookingTrends: () => 'bookings:trends',
     revenueStats: () => 'bookings:revenue:*',
+    // CacheKeys.bookingStats writes under bookings:stats:<filters>, which
+    // `stats:*` does not match -- the two live in different namespaces.
+    bookingStats: () => 'bookings:stats:*',
 
     // Blog patterns
     allBlogPosts: () => 'blog:post*',
