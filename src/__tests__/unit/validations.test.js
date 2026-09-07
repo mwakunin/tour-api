@@ -541,6 +541,26 @@ describe('Tour Validation Schemas', () => {
       );
     });
 
+    // The refinement used to read `min_age && max_age`, so a min_age of 0 --
+    // legitimate, and falsy -- skipped the comparison entirely. The 40/10 case
+    // above passes truthiness and could never have caught this.
+    it('should reject an inverted age range with a zero lower bound', () => {
+      const inverted = {
+        title: 'Zero Lower Bound',
+        slug: 'zero-lower-bound',
+        overview:
+          'A detailed overview that comfortably clears the hundred character minimum this schema requires of every tour it accepts.',
+        duration: 3,
+        pricing: { amount: 100, currency: 'USD' },
+        images: ['https://example.com/image1.jpg'],
+        age_restriction: { min_age: 0, max_age: -1 },
+      };
+
+      expect(() => tourCreateSchema.parse(inverted)).toThrow(
+        /Min age must be less than max age/
+      );
+    });
+
     it('should accept a sensible age range', () => {
       const sensible = {
         title: 'Sensible Ages',

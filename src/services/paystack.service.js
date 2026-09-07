@@ -10,9 +10,8 @@ import { bookings } from '#models/booking.model.js';
 import { eq, and, ne } from 'drizzle-orm';
 import logger from '#config/logger.js';
 import { emailService } from './email.service.js';
-import { cache } from '#utils/cache.js';
-import { CacheKeys } from '#utils/cacheKeys.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
+import { invalidateBooking } from '#utils/cacheInvalidation.js';
 
 // Paystack is a third party that can hang. Without a bound, a slow
 // response holds this request and its connection open indefinitely.
@@ -210,11 +209,18 @@ export const verifyPaystackPayment = async (reference) => {
         throw new Error('Payment amount mismatch');
       }
 
-      // Conditional on the payment still being incomplete, so concurrent
-      // verifications cannot both complete it. Only the caller whose UPDATE
-      // actually changes a row goes on to settle.
-      const [completedPayment] = await withTenantDb((tx) =>
-        tx
+      // The claim, the settlement and the booking confirmation share one
+      // transaction, as pesapal and mpesa now do. Split across three, a
+      // failure after the claim was unrecoverable: the payment row is already
+      // 'completed', so the next verification returns "Payment already
+      // verified" near the top of this function and never retries the booking
+      // update. The customer paid, the booking stayed unconfirmed, and no
+      // confirmation was ever sent.
+      const confirmedPayment = await withTenantDb(async (tx) => {
+        // Conditional on the payment still being incomplete, so concurrent
+        // verifications cannot both complete it. Only the caller whose UPDATE
+        // actually changes a row goes on to settle.
+        const [completedPayment] = await tx
           .update(payments)
           .set({
             status: 'completed',
@@ -224,26 +230,39 @@ export const verifyPaystackPayment = async (reference) => {
           .where(
             and(eq(payments.id, payment.id), ne(payments.status, 'completed'))
           )
-          .returning()
-      );
+          .returning();
 
-      if (completedPayment) {
+        if (!completedPayment) return null;
+
         // recordBookingSettlement reads booking.booking_reference for the
         // settlement notes, which is what reconciliation matches on. Fetched
         // here rather than at the later email step, which ran after this call
         // and left every Paystack settlement with a null reference.
-        const settledBooking = await withTenantDb((tx) =>
-          tx.query.bookings.findFirst({
-            where: eq(bookings.id, payment.booking_id),
-          })
-        );
+        const settledBooking = await tx.query.bookings.findFirst({
+          where: eq(bookings.id, payment.booking_id),
+        });
 
         // Money has moved: record it and spend it against the receivable.
         await recordBookingSettlement({
           payment: completedPayment,
           booking: settledBooking,
         });
-      } else {
+
+        await tx
+          .update(bookings)
+          .set({
+            payment_status: 'paid',
+            payment_method: 'paystack',
+            payment_id: reference,
+            status: 'confirmed',
+            updated_at: new Date(),
+          })
+          .where(eq(bookings.id, payment.booking_id));
+
+        return completedPayment;
+      });
+
+      if (!confirmedPayment) {
         logger.info(
           'Paystack completion already claimed, skipping settlement',
           {
@@ -268,20 +287,6 @@ export const verifyPaystackPayment = async (reference) => {
           },
         };
       }
-
-      // Update booking
-      await withTenantDb((tx) =>
-        tx
-          .update(bookings)
-          .set({
-            payment_status: 'paid',
-            payment_method: 'paystack',
-            payment_id: reference,
-            status: 'confirmed',
-            updated_at: new Date(),
-          })
-          .where(eq(bookings.id, payment.booking_id))
-      );
 
       // ✅ Get complete booking with tour details for email
       const booking = await withTenantDb((tx) =>
@@ -309,13 +314,17 @@ export const verifyPaystackPayment = async (reference) => {
         }
       }
 
-      // ✅ Invalidate caches
+      // Through the shared helper rather than three hand-picked keys. The
+      // list it cleared did not include bookings:stats:* or
+      // bookings:revenue:*, so filtered booking statistics stayed stale for
+      // their full ten minutes after a payment landed.
       try {
-        await cache.del(CacheKeys.booking(payment.booking_id));
-        await cache.delPattern(
-          CacheKeys.patterns.userBookings(booking?.user_id)
+        await invalidateBooking(
+          payment.booking_id,
+          booking?.user_id,
+          booking?.tour_id,
+          booking?.booking_reference
         );
-        await cache.delPattern(CacheKeys.patterns.bookingLists());
       } catch (cacheError) {
         logger.error('Cache invalidation error (non-critical):', cacheError);
       }

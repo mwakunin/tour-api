@@ -9,7 +9,31 @@ const router = express.Router();
 // means every tenant's chat traffic went to Footloose's workflow. Configured
 // now; per-tenant routing belongs with the rest of the tenant settings when
 // there is a second operator to route.
-const CHAT_WEBHOOK_URL = process.env.CHAT_WEBHOOK_URL;
+// https only. The body forwarded upstream is whatever the visitor typed into
+// the chat widget, and an http endpoint puts it on the wire in clear. Resolved
+// once at load rather than per request, so a misconfigured deployment shows up
+// in the logs immediately instead of on the first message.
+const CHAT_WEBHOOK_URL = (() => {
+  const raw = process.env.CHAT_WEBHOOK_URL;
+  if (!raw) return undefined;
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:') {
+      logger.error(
+        '[Chat] CHAT_WEBHOOK_URL must use https; refusing to use it',
+        {
+          protocol: parsed.protocol,
+        }
+      );
+      return undefined;
+    }
+    return raw;
+  } catch {
+    logger.error('[Chat] CHAT_WEBHOOK_URL is not a valid URL');
+    return undefined;
+  }
+})();
 
 // The upstream is a workflow engine that can hang. Without a bound, a slow
 // n8n holds this request — and its socket — open indefinitely.
@@ -49,6 +73,9 @@ router.post('/', publicSecurityMiddleware, async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req.body),
       signal: controller.signal,
+      // A redirect would resend this body to whatever host the upstream names,
+      // which defeats the https check above.
+      redirect: 'error',
     });
 
     if (!response.ok) {

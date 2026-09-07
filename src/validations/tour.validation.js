@@ -215,8 +215,12 @@ export const tourSchema = z
   )
   .refine(
     (data) => {
-      if (data.age_restriction?.min_age && data.age_restriction?.max_age) {
-        return data.age_restriction.min_age < data.age_restriction.max_age;
+      // Presence, not truthiness. min_age 0 is a legitimate value and a
+      // falsy one, so `min_age && max_age` skipped the comparison entirely
+      // and { min_age: 0, max_age: -1 } passed straight through to the insert.
+      const { min_age, max_age } = data.age_restriction ?? {};
+      if (min_age !== undefined && max_age !== undefined) {
+        return min_age < max_age;
       }
       return true;
     },
@@ -707,8 +711,12 @@ export const tourCreateSchema = z
   // tourUpdateSchema never had it.
   .refine(
     (data) => {
-      if (data.age_restriction?.min_age && data.age_restriction?.max_age) {
-        return data.age_restriction.min_age < data.age_restriction.max_age;
+      // Presence, not truthiness. min_age 0 is a legitimate value and a
+      // falsy one, so `min_age && max_age` skipped the comparison entirely
+      // and { min_age: 0, max_age: -1 } passed straight through to the insert.
+      const { min_age, max_age } = data.age_restriction ?? {};
+      if (min_age !== undefined && max_age !== undefined) {
+        return min_age < max_age;
       }
       return true;
     },

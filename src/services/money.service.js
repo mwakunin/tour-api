@@ -533,6 +533,17 @@ export const allocate = ({
       );
     }
 
+    // The settlement side needs the same check. settlements.status defaults
+    // to 'pending' and recordSettlement takes whatever status the caller
+    // passes, so without this a pending or failed settlement can be allocated:
+    // the cash legs below debit cash_* for money that has not arrived and the
+    // receivable is reduced against it.
+    if (settlement.status !== 'completed') {
+      throw new Error(
+        `[money] settlement ${settlementId} is '${settlement.status}', not completed`
+      );
+    }
+
     if (obligation.currency !== settlement.currency) {
       throw new Error(
         `[money] currency mismatch: obligation is ${obligation.currency}, ` +

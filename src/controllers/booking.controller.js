@@ -15,7 +15,7 @@ import {
 import logger from '#config/logger.js';
 import { withTenantDb } from '#config/tenantContext.js';
 import { bookings } from '#models/booking.model.js';
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
 import {
   bookingCustomerEditableSchema,
@@ -442,9 +442,41 @@ export const updateBookingController = async (req, res, next) => {
           ...updateData,
           updated_at: new Date(),
         })
-        .where(eq(bookings.id, bookingId))
+        // Repricing carries the paid-state check into the UPDATE itself. The
+        // authorization above read payment_status earlier in the request, so a
+        // payment settling in between let an admin change the total of a
+        // booking the customer had already paid. Other edits keep the plain
+        // condition: a paid booking may still have its status advanced.
+        .where(
+          repricing
+            ? and(
+                eq(bookings.id, bookingId),
+                ne(bookings.payment_status, 'paid')
+              )
+            : eq(bookings.id, bookingId)
+        )
         .returning()
     );
+
+    if (!updated && repricing) {
+      // Two causes now, and they need different answers: telling an admin
+      // "not found" about a booking that was paid a moment ago sends them
+      // looking for the wrong problem.
+      const [current] = await withTenantDb((tx) =>
+        tx
+          .select({ payment_status: bookings.payment_status })
+          .from(bookings)
+          .where(eq(bookings.id, bookingId))
+          .limit(1)
+      );
+
+      if (current) {
+        return res.status(409).json({
+          success: false,
+          error: `Cannot reprice a booking whose payment is already ${current.payment_status}`,
+        });
+      }
+    }
 
     if (!updated) {
       // The UPDATE matched nothing — the booking does not exist, or belongs to

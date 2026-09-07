@@ -315,6 +315,39 @@ describe('money service', () => {
     expect(receivableTotal).toBe(0);
   });
 
+  it('refuses to allocate a settlement that has not completed', async () => {
+    const obligation = await receivable(100000);
+    const pending = await asTenant(() =>
+      money.recordSettlement({
+        direction: 'in',
+        method: 'mpesa',
+        amountCents: 100000,
+        currency: 'KES',
+        externalReference: 'RCP-PENDING',
+        status: 'pending',
+      })
+    );
+
+    // recordSettlement takes the status the caller gives it and the column
+    // defaults to 'pending', so without this guard the cash legs would debit
+    // cash_mpesa for money that has not arrived and reduce the receivable
+    // against it.
+    await expect(
+      asTenant(() =>
+        money.allocate({
+          obligationId: obligation.id,
+          settlementId: pending.id,
+          amountCents: 100000,
+        })
+      )
+    ).rejects.toThrow(/not completed/);
+
+    const left = await asTenant(() =>
+      withTenantDb((tx) => money.outstandingCentsFor(tx, obligation.id))
+    );
+    expect(left).toBe(100000);
+  });
+
   it('refuses to allocate against a voided obligation', async () => {
     const obligation = await receivable(100000);
     const settlement = await cashIn(100000);
