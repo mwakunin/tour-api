@@ -12,6 +12,10 @@ import {
   updateCounterpartyController,
   deleteCounterpartyController,
 } from '#controllers/counterparty.controller.js';
+import {
+  listPayablesController,
+  payCounterpartyController,
+} from '#controllers/payable.controller.js';
 import { requireAuth, requireAdmin } from '#middleware/auth.middleware.js';
 import { authSecurityMiddleware } from '#middleware/security.middleware.js';
 
@@ -24,6 +28,15 @@ const adminOnly = [authSecurityMiddleware, requireAuth, requireAdmin];
 
 router.get('/', ...adminOnly, listCounterpartiesController);
 router.post('/', ...adminOnly, createCounterpartyController);
+
+// What this counterparty is owed, and paying them. Registered before the bare
+// '/:id' handlers so the more specific paths are matched first.
+//
+// A payment is addressed to the counterparty rather than to one invoice: an
+// operator pays a lodge a lump sum and expects it to clear what has been owed
+// longest, which is what the money layer does with it.
+router.get('/:id/payables', ...adminOnly, listPayablesController);
+router.post('/:id/payments', ...adminOnly, payCounterpartyController);
 
 // Dynamic routes last, so a future '/summary' or '/export' is not swallowed
 // by ':id'.
