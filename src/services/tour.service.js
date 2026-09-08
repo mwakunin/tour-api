@@ -30,6 +30,7 @@ import { cache } from '#utils/cache.js';
 import { CacheKeys } from '#utils/cacheKeys.js';
 import { withRetry } from '#utils/dbRetry.js';
 import logger from '#config/logger.js';
+import { kesPerUsd } from '#services/reportingFx.service.js';
 
 // ============= PRICING SQL FRAGMENTS =============
 // Tiers live nested inside pricing_periods, so every price predicate needs a
@@ -1250,6 +1251,18 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
 
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
+        // The KES divisor, from fx_rates rather than a literal. Resolved per
+        // call, so a corrected rate reaches the dashboard on the next cache
+        // miss rather than the next deploy.
+        //
+        // sql.raw of a formatted number rather than an interpolated value.
+        // Drizzle would bind it as a parameter, and a bound divisor promotes
+        // `numeric / param` to double precision -- 1000/130 comes out
+        // ...076925 instead of ...076923, and that drift compounds through the
+        // SUM before the final ROUND. As a literal the division stays numeric.
+        // toFixed also guarantees the raw string is a number and nothing else.
+        const kesRate = sql.raw((await kesPerUsd()).toFixed(6));
+
         const result =
           metric === 'revenue'
             ? await withTenantDb((tx) =>
@@ -1258,7 +1271,7 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
           t.id,
           t.title as name,
           SUM(CASE 
-            WHEN b.currency = 'KES' THEN b.total_price / 130.0
+            WHEN b.currency = 'KES' THEN b.total_price / ${kesRate}
             ELSE b.total_price 
           END) as value
         FROM tours t
