@@ -20,8 +20,7 @@ import {
   currentTenantId,
   inTenantTransaction,
 } from '#config/tenantContext.js';
-import { obligations, counterparties } from '#models/schema.js';
-import { decimalToCents } from '#utils/money.js';
+import { obligations, counterparties, tenants } from '#models/schema.js';
 import logger from '#config/logger.js';
 import * as money from './money.service.js';
 
@@ -34,7 +33,11 @@ const SOURCE = 'booking';
 //
 // Rounds half up at the last cent rather than truncating, so the operator does
 // not systematically underpay by a fraction on every booking.
-const commissionCentsFor = (totalCents, rateBps) =>
+//
+// Shared by the agent commission and the deposit split. One helper rather than
+// two because a pair of these is a pair that drifts, and the one that drifts is
+// always the one nobody remembers to update.
+const centsAtBps = (totalCents, rateBps) =>
   Number((BigInt(totalCents) * BigInt(rateBps) + 5000n) / 10000n);
 
 /**
@@ -77,10 +80,10 @@ export const raiseAgentCommission = async (booking) => {
     return null;
   }
 
-  const totalCents = decimalToCents(booking.total_price);
+  const totalCents = booking.total_price_cents;
   if (!totalCents || totalCents <= 0) return null;
 
-  const amountCents = commissionCentsFor(totalCents, agent.commission_rate_bps);
+  const amountCents = centsAtBps(totalCents, agent.commission_rate_bps);
 
   // A rate low enough to round to nothing on a small booking. An obligation of
   // zero is rejected by assertAmountCents anyway, and there is nothing to owe.
@@ -100,13 +103,60 @@ export const raiseAgentCommission = async (booking) => {
 };
 
 /**
- * Raises the receivable for a booking.
+ * The tenant's deposit policy, or null when it has none.
  *
- * Deliberately ONE obligation for the full amount rather than a deposit /
- * balance pair. Partial payment already falls out of the allocations model, so
- * a schedule buys nothing until there is a real per-operator deposit policy
- * (30% now, balance 30 days before departure) to drive it — and inventing one
- * here would bake a number nobody chose into the ledger.
+ * Null is the default and the answer for every operator today, which is what
+ * keeps a booking raising the single full-amount receivable it always did.
+ */
+const depositPolicy = async () => {
+  const [row] = await withTenantDb((tx) =>
+    tx
+      .select({
+        bps: tenants.deposit_percent_bps,
+        daysBefore: tenants.balance_due_days_before_departure,
+      })
+      .from(tenants)
+      .where(eq(tenants.id, currentTenantId()))
+      .limit(1)
+  );
+
+  if (!row?.bps) return null;
+  return { bps: row.bps, daysBefore: row.daysBefore };
+};
+
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+// Day arithmetic in UTC on a YYYY-MM-DD string. Deliberately not
+// `new Date(iso)` plus setHours: that mixes UTC parsing with local-time
+// mutation and shifts the day for anyone behind UTC — the same trap
+// tour.validation.js documents for period boundaries.
+const isoDaysBefore = (iso, days) => {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+};
+
+/**
+ * Raises the receivables for a booking.
+ *
+ * Returns every obligation raised, in the order they fall due — one element
+ * with no deposit policy, two with one. An array rather than an obligation
+ * because this can legitimately create either, and a return value that is
+ * sometimes a row and sometimes a list is the shape callers get wrong.
+ *
+ * WITH NO POLICY, which is the default: one obligation for the full amount,
+ * due on the departure date. Unchanged.
+ *
+ * WITH ONE: a deposit due today and a balance due `daysBefore` days ahead of
+ * departure. The balance is the remainder — total minus deposit, not a second
+ * percentage — so the two always sum to the booking exactly and no rounding
+ * lands between them. The deposit carries an explicit due date rather than
+ * null, because a null due_on sorts LAST in ASC and applySettlement would then
+ * spend the customer's first payment on the balance leg.
+ *
+ * A balance date already in the past — a booking made inside the notice
+ * period — is clamped to today rather than backdated. It is genuinely due now;
+ * writing an older date would only make it look overdue for longer than it is.
  *
  * Raised at creation, not confirmation, so the outstanding balance is visible
  * from the moment the customer commits. The cost is that an abandoned pending
@@ -114,29 +164,90 @@ export const raiseAgentCommission = async (booking) => {
  */
 export const raiseBookingReceivable = async (booking) => {
   try {
-    const amountCents = decimalToCents(booking.total_price);
+    // Read straight off the column now that bookings store cents. This used
+    // to be decimalToCents(booking.total_price) — a conversion between two
+    // representations of the same money, which is exactly the class of step
+    // that loses a cent.
+    const amountCents = booking.total_price_cents;
     if (!amountCents || amountCents <= 0) {
       logger.warn(
         '[bookingLedger] skipping receivable for non-positive total',
         {
           bookingId: booking.id,
-          total: booking.total_price,
+          totalCents: booking.total_price_cents,
         }
       );
-      return null;
+      return [];
     }
 
-    return await money.createObligation({
-      direction: 'receivable',
-      kind: 'full',
-      sourceType: SOURCE,
-      sourceId: booking.id,
-      amountCents,
-      currency: booking.currency,
-      dueOn: booking.start_date
-        ? new Date(booking.start_date).toISOString().slice(0, 10)
-        : null,
-      description: booking.booking_reference,
+    const departureOn = booking.start_date
+      ? new Date(booking.start_date).toISOString().slice(0, 10)
+      : null;
+
+    const policy = await depositPolicy();
+    const depositCents = policy ? centsAtBps(amountCents, policy.bps) : 0;
+    const balanceCents = amountCents - depositCents;
+
+    // A percentage that rounds to nothing on a small booking, or one that
+    // leaves no balance. Either way the schedule has no second leg, so it is
+    // not a schedule — fall back to the single obligation rather than posting
+    // one that assertAmountCents would reject anyway.
+    if (!policy || depositCents <= 0 || balanceCents <= 0) {
+      if (policy) {
+        logger.info('[bookingLedger] deposit policy yields no split', {
+          bookingId: booking.id,
+          amountCents,
+          depositCents,
+        });
+      }
+
+      const full = await money.createObligation({
+        direction: 'receivable',
+        kind: 'full',
+        sourceType: SOURCE,
+        sourceId: booking.id,
+        amountCents,
+        currency: booking.currency,
+        dueOn: departureOn,
+        description: booking.booking_reference,
+      });
+      return [full];
+    }
+
+    const today = todayIso();
+    const balanceOn =
+      departureOn && policy.daysBefore !== null
+        ? isoDaysBefore(departureOn, policy.daysBefore)
+        : departureOn;
+
+    // One transaction around both. A booking that raised a deposit and then
+    // failed to raise its balance would understate what the customer owes by
+    // the larger half, and nothing downstream would notice — the deposit looks
+    // like a complete receivable.
+    return await withTenantDb(async () => {
+      const deposit = await money.createObligation({
+        direction: 'receivable',
+        kind: 'deposit',
+        sourceType: SOURCE,
+        sourceId: booking.id,
+        amountCents: depositCents,
+        currency: booking.currency,
+        dueOn: today,
+        description: `${booking.booking_reference} deposit`,
+      });
+
+      const balance = await money.createObligation({
+        direction: 'receivable',
+        kind: 'balance',
+        sourceType: SOURCE,
+        sourceId: booking.id,
+        amountCents: balanceCents,
+        currency: booking.currency,
+        dueOn: balanceOn && balanceOn < today ? today : balanceOn,
+        description: `${booking.booking_reference} balance`,
+      });
+
+      return [deposit, balance];
     });
   } catch (error) {
     // Same rule as the settlement path. Outside a transaction the decision
@@ -150,7 +261,7 @@ export const raiseBookingReceivable = async (booking) => {
       bookingId: booking.id,
       error: error.message,
     });
-    return null;
+    return [];
   }
 };
 
@@ -164,7 +275,7 @@ export const raiseBookingReceivable = async (booking) => {
  */
 export const recordBookingSettlement = async ({ payment, booking }) => {
   try {
-    const amountCents = decimalToCents(payment.amount);
+    const amountCents = payment.amount_cents;
     if (!amountCents || amountCents <= 0) {
       logger.warn(
         '[bookingLedger] skipping settlement for non-positive amount',

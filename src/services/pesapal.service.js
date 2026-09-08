@@ -8,7 +8,7 @@ import { and, eq, ne } from 'drizzle-orm';
 import { emailService } from './email.service.js';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
-import { decimalToCents } from '#utils/money.js';
+import { decimalToCents, centsToDecimal } from '#utils/money.js';
 
 const PESAPAL_LIVE_URL = 'https://pay.pesapal.com/v3';
 const PESAPAL_SANDBOX_URL = 'https://cybqa.pesapal.com/pesapalv3';
@@ -297,7 +297,7 @@ export async function initializePesapalPayment({
       tenant_id: currentTenantId(),
       id: crypto.randomUUID(),
       booking_id: bookingId,
-      amount: amount.toString(),
+      amount_cents: decimalToCents(amount),
       currency: currency || 'KES',
       payment_method: 'pesapal',
       pesapal_tracking_id: order_tracking_id,
@@ -382,14 +382,16 @@ export async function verifyPesapalPayment(orderTrackingId) {
     // for whatever the provider reports — Paystack verification already does
     // this comparison.
     if (isCompleted) {
-      const expectedCents = decimalToCents(payment.amount);
+      // The recorded side is already cents; only the provider's figure still
+      // arrives as a decimal and needs converting.
+      const expectedCents = payment.amount_cents;
       const reportedCents = decimalToCents(amount);
       if (expectedCents !== reportedCents || currency !== payment.currency) {
         logger.error(
           'Pesapal amount/currency mismatch — refusing to complete',
           {
             orderTrackingId,
-            expected: `${payment.amount} ${payment.currency}`,
+            expected: `${centsToDecimal(payment.amount_cents)} ${payment.currency}`,
             reported: `${amount} ${currency}`,
           }
         );

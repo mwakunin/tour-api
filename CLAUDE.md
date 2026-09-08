@@ -116,6 +116,15 @@ mechanism. `bookings`, `tours`, `payments` and the rest join the policy set in
 the change that moves their handlers onto `withTenantDb` and drops the
 `tenant_id` DEFAULT.
 
+**Deposit policy is per-tenant, and null by default.** `tenants.deposit_percent_bps`
+and `tenants.balance_due_days_before_departure` drive whether
+`raiseBookingReceivable` posts one full-amount receivable or a deposit/balance
+pair. Null means one, which is what every operator does today. **There is no
+endpoint to set them** — deposit terms belong to the tenancy product, which is
+not built, so it is an owner-plane `UPDATE` and the CHECK constraints on
+`tenants` are the only validation. The balance leg is always `total - deposit`,
+never a second percentage, so the two sum to the booking exactly.
+
 **Two connections, on purpose.** `FORCE ROW LEVEL SECURITY` still exempts a
 table's owner, so an app connecting as the owner has decorative policies.
 `database.js` (`DATABASE_URL`, owner) is for migrations and the owner plane;
@@ -175,6 +184,10 @@ const { default: app } = await import('../../app.js');
 ```
 
 **3. Drizzle `decimal` columns return as strings.** Any column defined as `decimal('x', { precision, scale })` comes back from Postgres as a JS string, not a number. Always `parseFloat()` before doing arithmetic (e.g. `tour.price_amount` from the `tours` table).
+
+**Money that moves is integer cents, and the decimals are generated from it.** `bookings.total_price_cents`, `bookings.price_per_person_cents` and `payments.amount_cents` are the stored, writeable columns. `total_price`, `price_per_person` and `amount` are `GENERATED ALWAYS ... STORED` from them — they still read as `"1000.15"` strings so the API contract and every reader (invoice PDF, emails, revenue SQL) are unchanged, but **an INSERT or UPDATE naming one fails with `428C9`**. Write the `_cents` column. Do not add a second column "kept in sync"; that is what this replaced.
+
+`tours` pricing is deliberately still decimal — `price_amount`, `compare_at_amount` and the `pricing_periods` JSONB tiers (`price_per_person`, `compare_at_price`, `total` as JSON numbers). Those are the catalogue, not money that has moved, and their shape is a cross-repo contract with the frontend's `src/lib/utils/pricing.ts`. Converting them is a coordinated change in both repos, not a backend refactor.
 
 **4. Better Auth user IDs are opaque strings, not integers.** Any leftover `z.number()` validation on a `user_id` field, or any `varchar`/`integer` column typed for the old Kinde/integer-ID era, will break. Better Auth generates random alphanumeric string IDs (e.g. `bd4ze9e4FM101GdIgz5o1eGTMibVBXHs`). Check both the Zod schema layer _and_ the actual Postgres column type when debugging ID-related validation or insert failures — they can disagree independently.
 

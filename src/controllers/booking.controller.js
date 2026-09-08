@@ -404,9 +404,11 @@ export const updateBookingController = async (req, res, next) => {
       const rateInCents = Math.round(pricePerPerson * 100);
       const totalInCents = rateInCents * existingBooking.data.group_size;
 
+      // Already in cents, and now stored that way — the round trip out to a
+      // decimal string and back was the only thing that could lose one.
       repricing = {
-        price_per_person: (rateInCents / 100).toFixed(2),
-        total_price: (totalInCents / 100).toFixed(2),
+        price_per_person_cents: rateInCents,
+        total_price_cents: totalInCents,
       };
     }
 
@@ -435,7 +437,7 @@ export const updateBookingController = async (req, res, next) => {
     if (repricing) {
       updateData = { ...updateData, ...repricing };
       logger.info(
-        `Booking ${bookingId} re-priced by admin ${req.user.id}: ${repricing.price_per_person} per person, total ${repricing.total_price}`
+        `Booking ${bookingId} re-priced by admin ${req.user.id}: ${repricing.price_per_person_cents} cents per person, total ${repricing.total_price_cents} cents`
       );
     }
 

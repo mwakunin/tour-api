@@ -2,6 +2,7 @@ import {
   pgTable,
   uuid,
   text,
+  bigint,
   decimal,
   timestamp,
   index,
@@ -9,7 +10,7 @@ import {
   unique,
   foreignKey,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { bookings } from './booking.model.js';
 import { user } from './user.model.js';
 import { currencyEnum, paymentTransactionStatusEnum } from './enums.model.js';
@@ -39,7 +40,13 @@ export const payments = pgTable(
       .references(() => bookings.id, { onDelete: 'cascade' })
       .notNull(),
 
-    amount: decimal('amount', { precision: 10, scale: 2 }).notNull(),
+    // Integer cents, for the same reason as bookings: this is what a provider
+    // actually moved, and settlements.amount_cents is what it becomes in the
+    // ledger. `amount` below is derived from it and cannot be written.
+    amount_cents: bigint('amount_cents', { mode: 'number' }).notNull(),
+    amount: decimal('amount', { precision: 10, scale: 2 })
+      .notNull()
+      .generatedAlwaysAs(sql`(amount_cents::numeric / 100)`),
     currency: currencyEnum('currency').default('KES').notNull(),
     payment_method: paymentMethodEnum('payment_method').notNull(),
 

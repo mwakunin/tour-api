@@ -1,0 +1,5 @@
+ALTER TABLE "tenants" ADD COLUMN "deposit_percent_bps" integer;--> statement-breakpoint
+ALTER TABLE "tenants" ADD COLUMN "balance_due_days_before_departure" integer;--> statement-breakpoint
+ALTER TABLE "tenants" ADD CONSTRAINT "tenants_deposit_percent_bps_range" CHECK ("tenants"."deposit_percent_bps" IS NULL OR ("tenants"."deposit_percent_bps" > 0 AND "tenants"."deposit_percent_bps" < 10000));--> statement-breakpoint
+ALTER TABLE "tenants" ADD CONSTRAINT "tenants_balance_due_days_non_negative" CHECK ("tenants"."balance_due_days_before_departure" IS NULL OR "tenants"."balance_due_days_before_departure" >= 0);--> statement-breakpoint
+ALTER TABLE "tenants" ADD CONSTRAINT "tenants_balance_days_needs_deposit" CHECK ("tenants"."balance_due_days_before_departure" IS NULL OR "tenants"."deposit_percent_bps" IS NOT NULL);

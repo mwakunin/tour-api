@@ -9,6 +9,7 @@ import { emailService } from './email.service.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
 import { tenants } from '#models/tenant.model.js';
+import { decimalToCents } from '#utils/money.js';
 
 // Logged once per process so "are we hitting live Safaricom?" is answerable
 // from the logs rather than inferred from a URL in an error message.
@@ -139,7 +140,8 @@ export const initiateSTKPush = async ({
         .values({
           tenant_id: currentTenantId(),
           booking_id: bookingId,
-          amount: chargedAmount.toString(),
+          // Whole shillings, so this is exact.
+          amount_cents: decimalToCents(chargedAmount.toString()),
           currency: 'KES',
           payment_method: 'mpesa',
           mpesa_phone_number: formattedPhone,

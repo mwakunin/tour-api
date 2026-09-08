@@ -1,0 +1,36 @@
+# deploy/Caddyfile
+#
+# TLS termination for the production stack. Caddy is the only container that
+# publishes a host port; the API listens on the compose network and is not
+# reachable from outside except through here.
+#
+# Caddy obtains and renews a Let's Encrypt certificate for API_PUBLIC_HOST on
+# its own, which is why this file is nine lines and there is no certbot cron.
+# That requires ports 80 and 443 reachable from the internet and a public DNS
+# A/AAAA record for API_PUBLIC_HOST pointing at this host — the HTTP-01
+# challenge is answered on :80, so do not firewall it off as "we only serve
+# https". Caddy redirects :80 to :443 itself once a certificate is issued.
+#
+# For a host with no public DNS (a LAN box, a staging VM), set
+# API_PUBLIC_HOST to something under .localhost or use `tls internal` — Caddy
+# then issues from its own CA instead of failing the ACME challenge on every
+# boot.
+
+{$API_PUBLIC_HOST} {
+	# X-Forwarded-For is *overwritten* here, not appended to, so a caller
+	# cannot prepend an address of their choosing. That is the guarantee
+	# TRUSTED_PROXY_HOPS=1 relies on — see the note in src/app.js.
+	request_header -X-Forwarded-For
+
+	reverse_proxy api:3000
+
+	# Caddy sets X-Forwarded-Proto: https, which is what makes better-auth
+	# mark the session cookie Secure (it reads the request protocol rather
+	# than NODE_ENV).
+	encode zstd gzip
+
+	log {
+		output stdout
+		format console
+	}
+}

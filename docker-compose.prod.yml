@@ -1,22 +1,70 @@
-version: '3.8'
+# docker-compose.prod.yml
+#
+# Explicit project name for the same reason docker-compose.yml has one: this
+# is a second folder called `api` alongside footloose/api, and without it
+# Compose names volumes and networks after the directory, so the two stacks
+# silently share them.
+name: tourops-api-prod
+
+# The API does NOT publish a host port. Caddy terminates TLS and is the only
+# way in; the API is reachable only on the compose network, as `api:3000`.
+#
+# This replaces the previous `3000:3000` mapping, which served session tokens,
+# passwords and payment callbacks in cleartext. If you deliberately want the
+# old direct-to-3000 shape back, uncomment the api `ports` block AND set
+# TRUSTED_PROXY_HOPS=0 — leaving it at 1 with nothing in front lets any caller
+# choose their own rate-limit bucket via x-forwarded-for.
 services:
   api:
-    image: footloose-api:latest
+    image: tourops-api:latest
     build:
       context: .
       target: production
-    container_name: footloose-api-prod
-    ports:
-      - '3000:3000'
+    container_name: tourops-api-prod
+    # ports:
+    #   - '3000:3000'
+    expose:
+      - '3000'
     environment:
       - NODE_ENV=production
       - PORT=3000
+      # Caddy overwrites x-forwarded-for, so exactly one hop is trustworthy.
+      - TRUSTED_PROXY_HOPS=1
     env_file:
       - .env.production
     networks:
-      - footloose-network
+      - tourops-network
+    restart: always
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: tourops-caddy-prod
+    depends_on:
+      - api
+    ports:
+      - '80:80'
+      - '443:443'
+      - '443:443/udp'
+    environment:
+      # The public hostname clients reach the API at. Caddy requests a
+      # certificate for exactly this name, so a mismatch with DNS fails the
+      # ACME challenge rather than serving a wrong certificate.
+      - API_PUBLIC_HOST=${API_PUBLIC_HOST:?set API_PUBLIC_HOST, e.g. api.example.com}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Issued certificates and the ACME account key. Without these volumes
+      # every restart re-requests a certificate and Let's Encrypt's rate limit
+      # (5 duplicate certificates per week) locks the deploy out.
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - tourops-network
     restart: always
 
 networks:
-  footloose-network:
+  tourops-network:
     driver: bridge
+
+volumes:
+  caddy-data:
+  caddy-config:

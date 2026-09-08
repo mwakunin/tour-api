@@ -63,6 +63,19 @@ const trustedHops = parseTrustedHops(process.env.TRUSTED_PROXY_HOPS);
 app.set('trust proxy', trustedHops);
 
 if (!trustedHops) {
+  if (process.env.NODE_ENV === 'production') {
+    // docker-compose.prod.yml puts Caddy in front and sets this to 1. Reaching
+    // here in production means the API is being served directly, so every
+    // session token, password and payment callback crosses the network in
+    // cleartext — and better-auth reads the request protocol to decide whether
+    // to mark its session cookie Secure, so it will correctly decide not to.
+    logger.warn(
+      '[App] TRUSTED_PROXY_HOPS=0 in production: nothing is terminating TLS ' +
+        'in front of this process. Traffic is unencrypted. See ' +
+        'docker-compose.prod.yml and deploy/Caddyfile.'
+    );
+  }
+
   // With no proxy to trust, this process becomes the trust boundary: the
   // forwarded headers are replaced with the address the connection actually
   // came from. `trust proxy` is 0 above, so req.ip is that socket address and

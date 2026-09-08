@@ -15,6 +15,7 @@ import { payments } from '#models/payment.model.js';
 import { eq, and, ne } from 'drizzle-orm';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
+import { decimalToCents } from '#utils/money.js';
 
 /**
  * Initialize payment (routes to correct provider)
@@ -216,7 +217,9 @@ export const confirmBankTransfer = async (
       booking_id: booking.id,
       user_id: booking.user_id,
       payment_method: 'bank_transfer',
-      amount: confirmationData.amount_received || booking.total_price,
+      amount_cents: confirmationData.amount_received
+        ? decimalToCents(confirmationData.amount_received)
+        : booking.total_price_cents,
       currency: booking.currency,
       status: 'completed',
       receipt_number: confirmationData.receipt_number || null,
@@ -281,7 +284,7 @@ export const confirmBankTransfer = async (
     logger.info('Bank transfer confirmed:', {
       bookingId,
       confirmedBy: confirmedByUserId,
-      amount: paymentRecord.amount,
+      amountCents: paymentRecord.amount_cents,
     });
 
     return {
