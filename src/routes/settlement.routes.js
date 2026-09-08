@@ -15,8 +15,14 @@ import {
 } from '#controllers/settlement.controller.js';
 import { requireAuth, requireAdmin } from '#middleware/auth.middleware.js';
 import { authSecurityMiddleware } from '#middleware/security.middleware.js';
+import { noStore } from '#middleware/cache.middleware.js';
 
 const router = express.Router();
+
+// Every response from this router is one operator's commercial position:
+// who they buy from, what they owe, what has been paid. None of it may sit in
+// a shared cache. On the router so a route added later is covered by default.
+router.use(noStore);
 
 // Security middleware ahead of requireAuth: behind it, an unauthenticated
 // request is answered 401 without ever reaching Arcjet.
