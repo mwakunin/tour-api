@@ -7,7 +7,7 @@
 // safe: replaying must not post the same money twice.
 
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 import { db, initDatabase } from '#config/database.js';
 import { appPool } from '#config/appDatabase.js';
@@ -295,6 +295,78 @@ describe('the ledger outbox', () => {
       );
       expect(entry.resolved_at).not.toBeNull();
       expect(entry.resolution).toBe('nothing to accrue');
+    });
+  });
+
+  describe('the queue rotates', () => {
+    it('does not re-read the same head every drain', async () => {
+      // The drain takes a bounded page. Ordered by created_at, entries that
+      // fail permanently sat at the head forever and nothing filed after them
+      // was ever looked at again — a full page of unconvertible bookings would
+      // have hidden every later failure indefinitely.
+      await db
+        .delete(fx_rates)
+        .where(eq(fx_rates.quote_currency, 'KES'))
+        .catch(() => {});
+
+      // Earlier tests in this file leave entries outstanding on purpose, and
+      // a drain of one would pick those instead. The queue has to be empty for
+      // "which two did it choose" to mean anything.
+      await db.delete(ledger_outbox).where(isNull(ledger_outbox.resolved_at));
+
+      const unconvertible = async () => {
+        const [booking] = await db
+          .insert(bookings)
+          .values({
+            tenant_id: SEED_TENANT_ID,
+            booking_reference: `ROT-${Date.now().toString(36)}-${Math.random()
+              .toString(36)
+              .slice(2, 6)}`,
+            tour_id: tourId,
+            group_size: 1,
+            start_date: new Date('2026-11-10'),
+            end_date: new Date('2026-11-17'),
+            price_per_person_cents: 50000,
+            total_price_cents: 50000,
+            currency: 'USD',
+            customer_name: 'Rotation Traveller',
+            customer_email: 'rotate@example.com',
+          })
+          .returning();
+        created.push(booking.id);
+        await asTenant(() =>
+          outbox.recordFailure({
+            operation: 'booking_receivable',
+            subjectId: booking.id,
+            error: new Error('no USD->KES rate'),
+          })
+        );
+        return booking.id;
+      };
+
+      const first = await unconvertible();
+      const second = await unconvertible();
+
+      // One at a time, so the page is exactly the head.
+      await asTenant(() => bookingLedger.drainOutbox({ limit: 1 }));
+      await asTenant(() => bookingLedger.drainOutbox({ limit: 1 }));
+
+      const rows = await asTenant(() =>
+        withTenantDb((tx) =>
+          tx
+            .select()
+            .from(ledger_outbox)
+            .where(inArray(ledger_outbox.subject_id, [first, second]))
+        )
+      );
+
+      // Both were tried once. Under created_at ordering the first entry would
+      // have been retried twice and the second never.
+      expect(rows).toHaveLength(2);
+      for (const row of rows) {
+        expect(row.attempts).toBe(2); // 1 from filing, 1 from its drain
+        expect(row.resolved_at).toBeNull();
+      }
     });
   });
 

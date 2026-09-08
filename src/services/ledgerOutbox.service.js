@@ -97,8 +97,21 @@ export const noteAttempt = (id, error) =>
   );
 
 /**
- * Outstanding entries, oldest first — the order they should be retried in,
- * since a booking's receivable ought to exist before its settlement lands.
+ * Outstanding entries, least recently attempted first.
+ *
+ * NOT oldest-created first, which is what this did. The drain takes a bounded
+ * page, so with `limit` entries that fail permanently — fifty bookings in a
+ * currency with no rate, say — every drain re-read the same fifty and no
+ * failure filed afterwards was ever looked at again. The queue had a head, and
+ * it blocked.
+ *
+ * Ordering by the last attempt rotates instead: retrying an entry pushes it to
+ * the back, so the next page reaches what has waited longest. Nothing is
+ * starved and nothing is abandoned — see the note on `attempts` in the model
+ * for why entries are counted rather than capped.
+ *
+ * NULLS FIRST is explicit because Postgres puts them LAST in ASC, and an entry
+ * never attempted should be first in line, not last.
  */
 export const pendingEntries = (limit = 50) =>
   withTenantDb((tx) =>
@@ -111,7 +124,10 @@ export const pendingEntries = (limit = 50) =>
           isNull(ledger_outbox.resolved_at)
         )
       )
-      .orderBy(asc(ledger_outbox.created_at))
+      .orderBy(
+        sql`${ledger_outbox.last_attempted_at} ASC NULLS FIRST`,
+        asc(ledger_outbox.created_at)
+      )
       .limit(limit)
   );
 

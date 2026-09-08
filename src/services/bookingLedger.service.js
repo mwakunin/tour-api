@@ -509,7 +509,6 @@ export const drainOutbox = async ({ limit = 50 } = {}) => {
       await outbox.resolveEntry(entry.id, resolution);
       result.resolved += 1;
     } catch (error) {
-      await outbox.noteAttempt(entry.id, error);
       result.failed += 1;
       logger.warn('[bookingLedger] outbox entry still failing', {
         entryId: entry.id,
@@ -517,6 +516,19 @@ export const drainOutbox = async ({ limit = 50 } = {}) => {
         subjectId: entry.subject_id,
         error: error.message,
       });
+
+      // Guarded separately. This sits in the catch, so an error here escaped
+      // the loop and abandoned every entry after it -- the exact opposite of
+      // the isolation the comment above this function claims. Recording that a
+      // retry failed is worth attempting and not worth stopping for.
+      try {
+        await outbox.noteAttempt(entry.id, error);
+      } catch (noteError) {
+        logger.error('[bookingLedger] could not record a failed retry', {
+          entryId: entry.id,
+          error: noteError.message,
+        });
+      }
     }
   }
 
