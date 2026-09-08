@@ -169,6 +169,13 @@
       "when": 1788814784802,
       "tag": "0023_neat_warpath",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788827285218,
+      "tag": "0024_scoped_booking_set_null",
+      "breakpoints": true
     }
   ]
 }

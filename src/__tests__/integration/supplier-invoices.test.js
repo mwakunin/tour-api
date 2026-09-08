@@ -11,6 +11,7 @@ import app from '../../app.js';
 import { db, initDatabase } from '#config/database.js';
 import redis from '#config/redis.js';
 import { supplierInvoices } from '#models/supplierInvoice.model.js';
+import { bookings, tours } from '#models/schema.js';
 import {
   counterparties,
   obligations,
@@ -288,6 +289,93 @@ describe('Supplier Invoice API Integration Tests', () => {
     });
   });
 
+  describe('attributing a cost to a booking', () => {
+    let tourId;
+    let bookingId;
+
+    beforeEach(async () => {
+      const [tour] = await db
+        .insert(tours)
+        .values({
+          tenant_id: SEED_TENANT_ID,
+          title: 'Attribution Tour',
+          slug: `attribution-tour-${Date.now()}${Math.random()}`,
+          overview: 'Seeded for supplier invoice attribution.',
+          duration: 5,
+          price_amount: '1000.00',
+          price_currency: 'KES',
+          status: 'published',
+        })
+        .returning();
+      tourId = tour.id;
+
+      const [booking] = await db
+        .insert(bookings)
+        .values({
+          tenant_id: SEED_TENANT_ID,
+          booking_reference: `AT-${Date.now().toString(36)}`,
+          tour_id: tourId,
+          group_size: 2,
+          start_date: new Date('2026-11-10'),
+          end_date: new Date('2026-11-17'),
+          price_per_person: '500.00',
+          total_price: '1000.00',
+          currency: 'KES',
+          customer_name: 'Jane Traveller',
+          customer_email: 'jane@example.com',
+        })
+        .returning();
+      bookingId = booking.id;
+    });
+
+    afterEach(async () => {
+      await db.delete(bookings).where(eq(bookings.tour_id, tourId));
+      await db.delete(tours).where(eq(tours.id, tourId));
+    });
+
+    it('attributes an invoice to a booking', async () => {
+      const supplier = await newSupplier();
+      const response = await newInvoice(supplier, { booking_id: bookingId });
+
+      expect(response.status).toBe(201);
+      expect(response.body.data.booking_id).toBe(bookingId);
+    });
+
+    it('lets the booking be deleted, clearing only the attribution', async () => {
+      const supplier = await newSupplier();
+      const created = await newInvoice(supplier, { booking_id: bookingId });
+      expect(created.status).toBe(201);
+
+      // A plain ON DELETE SET NULL over the composite key nulls every column
+      // in it, tenant_id included — and tenant_id is NOT NULL, so this delete
+      // failed outright rather than clearing the attribution. The
+      // column-scoped form says what was meant.
+      await db.delete(bookings).where(eq(bookings.id, bookingId));
+
+      const [invoice] = await db
+        .select()
+        .from(supplierInvoices)
+        .where(eq(supplierInvoices.id, created.body.data.id));
+
+      // The debt survives the booking; only the attribution goes.
+      expect(invoice).toBeDefined();
+      expect(invoice.booking_id).toBeNull();
+      expect(invoice.tenant_id).toBe(SEED_TENANT_ID);
+    });
+
+    it('refuses a booking_id that resolves to nothing', async () => {
+      const supplier = await newSupplier();
+      const response = await newInvoice(supplier, {
+        booking_id: '11111111-1111-4111-8111-111111111111',
+      });
+
+      // Checked in the service rather than left to the foreign key, which
+      // would surface as an unmapped 23503 and a 500.
+      expect(response.status).toBe(404);
+      expect(response.body.error).toMatch(/Booking not found/);
+    });
+  });
+
   describe('GET /api/supplier-invoices', () => {
     it('reports outstanding from allocations rather than storing it', async () => {
       const supplier = await newSupplier();
@@ -336,9 +424,22 @@ describe('Supplier Invoice API Integration Tests', () => {
       );
     });
 
+    it('answers 400 for a malformed id, not 500', async () => {
+      // 'not-a-uuid' reaches a uuid column as a Postgres cast error, which the
+      // error handler reads as a database failure — a server fault reported
+      // for something the caller got wrong.
+      const response = await adminAgent.get(
+        '/api/supplier-invoices/not-a-uuid'
+      );
+      expect(response.status).toBe(400);
+    });
+
     it('404s for an unknown invoice', async () => {
       await adminAgent
-        .get('/api/supplier-invoices/00000000-0000-0000-0000-0000000000ef')
+        // A well-formed v4 uuid: the route validates the shape before it
+        // looks anything up, and zod v4 checks the RFC 4122 version nibble, so
+        // an all-zeros placeholder is a 400 rather than the 404 under test.
+        .get('/api/supplier-invoices/22222222-2222-4222-8222-222222222222')
         .expect(404);
     });
   });

@@ -21,7 +21,7 @@ import {
   bookingCustomerEditableSchema,
   bookingPriceAdjustmentSchema,
 } from '#validations/booking.validation.js';
-import { paginationSchema } from '#validations/common.js';
+import { paginationSchema, uuidParamSchema } from '#validations/common.js';
 import {
   bookingPnl,
   BOOKING_NOT_FOUND as PNL_BOOKING_NOT_FOUND,
@@ -546,9 +546,20 @@ export const getBookingTrendsController = async (req, res, next) => {
  */
 export const getBookingPnlController = async (req, res, next) => {
   try {
-    const pnl = await bookingPnl(req.params.id);
+    // Validated before the query: a malformed id reaches a uuid column as a
+    // Postgres cast error, which the error handler answers 500 rather than
+    // 400.
+    const { id } = uuidParamSchema.parse(req.params);
+    const pnl = await bookingPnl(id);
     res.json({ success: true, data: pnl });
   } catch (error) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.issues,
+      });
+    }
     if (error.message === PNL_BOOKING_NOT_FOUND) {
       return res
         .status(404)

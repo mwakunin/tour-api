@@ -18,6 +18,7 @@ import {
   obligations,
   allocations,
 } from '#models/money.model.js';
+import { bookings } from '#models/booking.model.js';
 import * as money from '#services/money.service.js';
 import { decimalToCents, centsToDecimal } from '#utils/money.js';
 import logger from '#config/logger.js';
@@ -25,6 +26,7 @@ import logger from '#config/logger.js';
 const SOURCE = 'supplier_invoice';
 
 const NOT_FOUND = 'Supplier invoice not found';
+const BOOKING_NOT_FOUND = 'Booking not found';
 const SUPPLIER_NOT_FOUND = 'Supplier not found';
 const NOT_A_SUPPLIER = 'That counterparty is not a supplier';
 const SUPPLIER_INACTIVE = 'That supplier is deactivated';
@@ -141,6 +143,21 @@ export const createSupplierInvoice = async (validated) => {
       if (!supplier) throw new Error(SUPPLIER_NOT_FOUND);
       if (supplier.type !== 'supplier') throw new Error(NOT_A_SUPPLIER);
       if (!supplier.is_active) throw new Error(SUPPLIER_INACTIVE);
+
+      // Checked here rather than left to the foreign key. A valid UUID that
+      // names no booking -- or one belonging to another tenant, which RLS
+      // makes invisible rather than forbidden -- would otherwise reach the
+      // (tenant_id, booking_id) constraint as a 23503 that nothing maps, and
+      // the caller would get a 500 for what is plainly their own mistake.
+      if (booking_id) {
+        const [booking] = await tx
+          .select({ id: bookings.id })
+          .from(bookings)
+          .where(eq(bookings.id, booking_id))
+          .limit(1);
+
+        if (!booking) throw new Error(BOOKING_NOT_FOUND);
+      }
 
       const [invoice] = await tx
         .insert(supplierInvoices)
@@ -291,6 +308,7 @@ export const voidSupplierInvoice = async (id) => {
 
 export {
   NOT_FOUND as SUPPLIER_INVOICE_NOT_FOUND,
+  BOOKING_NOT_FOUND as SUPPLIER_INVOICE_BOOKING_NOT_FOUND,
   SUPPLIER_NOT_FOUND,
   NOT_A_SUPPLIER,
   SUPPLIER_INACTIVE,

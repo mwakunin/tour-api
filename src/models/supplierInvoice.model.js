@@ -104,6 +104,15 @@ export const supplierInvoices = pgTable(
     // that direction imports back, so there is no cycle. bookings cannot
     // reference counterparties the same way for exactly that reason — see the
     // note on bookings.agent_id.
+    //
+    // DELIBERATE DIVERGENCE FROM THE DATABASE. Drizzle emits a plain
+    // ON DELETE SET NULL, which over a composite key nulls *every* column in
+    // it — including tenant_id, which is NOT NULL, so deleting an attributed
+    // booking fails rather than clearing the attribution. Migration 0024
+    // rewrites this as the column-scoped `SET NULL (booking_id)` that Postgres
+    // 15+ supports and Drizzle cannot express, exactly as 0007 does for
+    // blog_posts_category_tenant_fk. Do not "fix" the divergence by
+    // regenerating the constraint.
     bookingFk: foreignKey({
       name: 'supplier_invoices_booking_tenant_fk',
       columns: [table.tenant_id, table.booking_id],

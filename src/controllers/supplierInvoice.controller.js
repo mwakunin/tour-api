@@ -9,11 +9,13 @@ import {
   NOT_A_SUPPLIER,
   SUPPLIER_INACTIVE,
   SUPPLIER_INVOICE_DUPLICATE,
+  SUPPLIER_INVOICE_BOOKING_NOT_FOUND,
 } from '#services/supplierInvoice.service.js';
 import {
   validateSupplierInvoiceCreate,
   validateSupplierInvoiceQuery,
 } from '#validations/supplierInvoice.validation.js';
+import { uuidParamSchema } from '#validations/common.js';
 import logger from '#config/logger.js';
 
 // Zod v4 reports on `.issues`; `.errors` is undefined and drops every detail.
@@ -30,6 +32,7 @@ const isZod = (error) => error.name === 'ZodError';
 // these answer 4xx rather than falling through to a 500.
 const STATUS = {
   [SUPPLIER_INVOICE_NOT_FOUND]: 404,
+  [SUPPLIER_INVOICE_BOOKING_NOT_FOUND]: 404,
   [SUPPLIER_NOT_FOUND]: 404,
   [NOT_A_SUPPLIER]: 422,
   [SUPPLIER_INACTIVE]: 422,
@@ -76,9 +79,14 @@ export const listSupplierInvoicesController = async (req, res, next) => {
 
 export const getSupplierInvoiceController = async (req, res, next) => {
   try {
-    const invoice = await getSupplierInvoiceById(req.params.id);
+    // Validated before the query. A malformed id reaches a uuid column as a
+    // Postgres cast error, which errorHandler treats as a database failure and
+    // answers 500 -- a server fault for what the caller got wrong.
+    const { id } = uuidParamSchema.parse(req.params);
+    const invoice = await getSupplierInvoiceById(id);
     res.json({ success: true, data: invoice });
   } catch (error) {
+    if (isZod(error)) return zodError(res, error);
     return send(res, error, () => {
       logger.error('[Supplier Invoice Controller] Get error:', error);
       next(error);
@@ -88,13 +96,15 @@ export const getSupplierInvoiceController = async (req, res, next) => {
 
 export const voidSupplierInvoiceController = async (req, res, next) => {
   try {
-    const invoice = await voidSupplierInvoice(req.params.id);
+    const { id } = uuidParamSchema.parse(req.params);
+    const invoice = await voidSupplierInvoice(id);
     res.json({
       success: true,
       message: 'Invoice voided and its payable reversed',
       data: invoice,
     });
   } catch (error) {
+    if (isZod(error)) return zodError(res, error);
     return send(res, error, () => {
       logger.error('[Supplier Invoice Controller] Void error:', error);
       next(error);
