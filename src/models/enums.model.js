@@ -89,6 +89,17 @@ export const obligationKindEnum = pgEnum('obligation_kind', [
   'adjustment',
 ]);
 
+// What a failed ledger write was trying to do, so the outbox can retry it.
+//
+// The operation and the row it concerns, never the arguments it was called
+// with. A serialised payload replayed an hour later writes figures that were
+// true when it was captured; re-reading the booking writes what is true now.
+export const ledgerOutboxOperationEnum = pgEnum('ledger_outbox_operation', [
+  'booking_receivable',
+  'agent_commission',
+  'booking_settlement',
+]);
+
 // Lifecycle only. Whether an obligation is settled is DERIVED from its
 // allocations and never stored — see the note in money.model.js.
 export const obligationStatusEnum = pgEnum('obligation_status', [

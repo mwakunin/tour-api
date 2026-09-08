@@ -20,9 +20,16 @@ import {
   currentTenantId,
   inTenantTransaction,
 } from '#config/tenantContext.js';
-import { obligations, counterparties, tenants } from '#models/schema.js';
+import {
+  obligations,
+  counterparties,
+  tenants,
+  bookings,
+  payments,
+} from '#models/schema.js';
 import logger from '#config/logger.js';
 import * as money from './money.service.js';
+import * as outbox from './ledgerOutbox.service.js';
 
 const SOURCE = 'booking';
 
@@ -55,6 +62,13 @@ const centsAtBps = (totalCents, rateBps) =>
  */
 export const raiseAgentCommission = async (booking) => {
   if (!booking.agent_id) return null;
+
+  const already = await openObligationsFor(booking.id, 'payable');
+  if (already.length > 0) {
+    // Already accrued. Reached by a retry from the outbox, and returning the
+    // existing row lets the drain resolve the entry instead of trying forever.
+    return already[0];
+  }
 
   const [agent] = await withTenantDb((tx) =>
     tx
@@ -89,18 +103,62 @@ export const raiseAgentCommission = async (booking) => {
   // zero is rejected by assertAmountCents anyway, and there is nothing to owe.
   if (amountCents <= 0) return null;
 
-  return money.createObligation({
-    direction: 'payable',
-    kind: 'commission',
-    counterpartyId: agent.id,
-    sourceType: SOURCE,
-    sourceId: booking.id,
-    amountCents,
-    currency: booking.currency,
-    dueOn: new Date(booking.start_date).toISOString().slice(0, 10),
-    description: `Commission ${agent.name} ${booking.booking_reference}`,
-  });
+  try {
+    return await money.createObligation({
+      direction: 'payable',
+      kind: 'commission',
+      counterpartyId: agent.id,
+      sourceType: SOURCE,
+      sourceId: booking.id,
+      amountCents,
+      currency: booking.currency,
+      dueOn: new Date(booking.start_date).toISOString().slice(0, 10),
+      description: `Commission ${agent.name} ${booking.booking_reference}`,
+    });
+  } catch (error) {
+    // Same rule as the receivable: inside an ambient transaction there is
+    // nothing to carry on with, and filing an outbox entry on a dead
+    // transaction would fail too.
+    if (inTenantTransaction()) throw error;
+
+    logger.error('[bookingLedger] failed to raise agent commission', {
+      bookingId: booking.id,
+      error: error.message,
+    });
+    await outbox.recordFailure({
+      operation: 'agent_commission',
+      subjectId: booking.id,
+      error,
+    });
+    return null;
+  }
 };
+
+/**
+ * The open obligations this booking already raised in one direction.
+ *
+ * Both raisers check this before writing. Without it a retry from the outbox
+ * accrues the same revenue a second time, which is a worse failure than the
+ * one it is retrying — and the drain would do it on every pass.
+ *
+ * The check is the clean path; migration 0028's partial unique index is what
+ * makes it true when two drains run at once.
+ */
+const openObligationsFor = (bookingId, direction) =>
+  withTenantDb((tx) =>
+    tx
+      .select()
+      .from(obligations)
+      .where(
+        and(
+          eq(obligations.tenant_id, currentTenantId()),
+          eq(obligations.source_type, SOURCE),
+          eq(obligations.source_id, bookingId),
+          eq(obligations.direction, direction),
+          eq(obligations.status, 'open')
+        )
+      )
+  );
 
 /**
  * The tenant's deposit policy, or null when it has none.
@@ -164,6 +222,14 @@ const isoDaysBefore = (iso, days) => {
  */
 export const raiseBookingReceivable = async (booking) => {
   try {
+    const already = await openObligationsFor(booking.id, 'receivable');
+    if (already.length > 0) {
+      // Already accrued. A retry from the outbox lands here, and returning
+      // what exists lets the drain resolve the entry rather than post the same
+      // revenue again on every pass.
+      return already;
+    }
+
     // Read straight off the column now that bookings store cents. This used
     // to be decimalToCents(booking.total_price) — a conversion between two
     // representations of the same money, which is exactly the class of step
@@ -261,6 +327,13 @@ export const raiseBookingReceivable = async (booking) => {
       bookingId: booking.id,
       error: error.message,
     });
+    // Logged AND filed. The log was the whole record of this until now, and
+    // nobody reads logs looking for revenue that was never accrued.
+    await outbox.recordFailure({
+      operation: 'booking_receivable',
+      subjectId: booking.id,
+      error,
+    });
     return [];
   }
 };
@@ -341,6 +414,13 @@ export const recordBookingSettlement = async ({ payment, booking }) => {
       paymentId: payment?.id,
       error: error.message,
     });
+    if (payment?.id) {
+      await outbox.recordFailure({
+        operation: 'booking_settlement',
+        subjectId: payment.id,
+        error,
+      });
+    }
     return null;
   }
 };
@@ -401,4 +481,92 @@ export const voidBookingObligations = async (bookingId) => {
     });
     throw error;
   }
+};
+
+/**
+ * Retries the failed ledger writes in the outbox.
+ *
+ * Lives here rather than in ledgerOutbox.service because it has to call the
+ * three functions above, and putting it there would make the two modules
+ * import each other.
+ *
+ * There is no scheduler in this repo — dailySummary.js says as much — so this
+ * is driven by an endpoint an admin can hit, or by whatever cron the deploy
+ * already runs. Retrying is deliberately something somebody asks for: a failed
+ * accrual usually means a rate is missing or a counterparty was deleted, and a
+ * loop retrying that every minute produces noise, not books.
+ *
+ * Each entry is retried in isolation. One that keeps failing must not stop the
+ * others, which is the whole reason a batch of these is worth draining at all.
+ */
+export const drainOutbox = async ({ limit = 50 } = {}) => {
+  const entries = await outbox.pendingEntries(limit);
+  const result = { attempted: entries.length, resolved: 0, failed: 0 };
+
+  for (const entry of entries) {
+    try {
+      const resolution = await retryEntry(entry);
+      await outbox.resolveEntry(entry.id, resolution);
+      result.resolved += 1;
+    } catch (error) {
+      await outbox.noteAttempt(entry.id, error);
+      result.failed += 1;
+      logger.warn('[bookingLedger] outbox entry still failing', {
+        entryId: entry.id,
+        operation: entry.operation,
+        subjectId: entry.subject_id,
+        error: error.message,
+      });
+    }
+  }
+
+  logger.info('[bookingLedger] outbox drained', result);
+  return result;
+};
+
+/**
+ * Replays one entry, returning how it ended. Throws if it failed again.
+ *
+ * A subject that has since disappeared resolves rather than retrying forever:
+ * a booking deleted in the meantime has no revenue left to accrue, and an
+ * entry nobody can ever action is the logged-and-forgotten failure this table
+ * was built to replace.
+ */
+const retryEntry = async (entry) => {
+  if (entry.operation === 'booking_settlement') {
+    const [payment] = await withTenantDb((tx) =>
+      tx.select().from(payments).where(eq(payments.id, entry.subject_id))
+    );
+    if (!payment) return 'payment no longer exists';
+
+    const [booking] = await withTenantDb((tx) =>
+      tx.select().from(bookings).where(eq(bookings.id, payment.booking_id))
+    );
+
+    const settlement = await recordBookingSettlement({ payment, booking });
+    // A null here is the 23505 branch: another path recorded this settlement
+    // first, which is the guard working rather than a failure to retry.
+    return settlement
+      ? `settled ${settlement.id}`
+      : 'already settled elsewhere';
+  }
+
+  const [booking] = await withTenantDb((tx) =>
+    tx.select().from(bookings).where(eq(bookings.id, entry.subject_id))
+  );
+  if (!booking) return 'booking no longer exists';
+
+  if (entry.operation === 'agent_commission') {
+    const commission = await raiseAgentCommission(booking);
+    return commission ? `commission ${commission.id}` : 'no commission due';
+  }
+
+  const raised = await raiseBookingReceivable(booking);
+  if (raised.length === 0) {
+    // The raiser filed a fresh failure of its own rather than throwing, or
+    // the total is non-positive. Either way this entry has not been dealt
+    // with, so it must not be resolved.
+    throw new Error('receivable still could not be raised');
+  }
+  return `raised ${raised.map((row) => row.id).join(', ')}`;
 };

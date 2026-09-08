@@ -26,6 +26,7 @@ import counterpartyRoutes from '#routes/counterparty.routes.js';
 import fxRateRoutes from '#routes/fxRate.routes.js';
 import supplierInvoiceRoutes from '#routes/supplierInvoice.routes.js';
 import settlementRoutes from '#routes/settlement.routes.js';
+import ledgerOutboxRoutes from '#routes/ledgerOutbox.routes.js';
 import { corsOptions } from '#config/cors.config.js';
 import usersRoutes from '#routes/users.routes.js';
 import adminTestRoutes from '#routes/admin-test.routes.js';
@@ -171,6 +172,8 @@ app.use('/api/counterparties', counterpartyRoutes);
 app.use('/api/fx-rates', fxRateRoutes);
 app.use('/api/supplier-invoices', supplierInvoiceRoutes);
 app.use('/api/settlements', settlementRoutes);
+// Accruals that failed to reach the books, and the retry for them.
+app.use('/api/ledger-outbox', ledgerOutboxRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/inquiries', inquiryRoutes);
 app.use('/api/blog', blogRoutes);
