@@ -1251,22 +1251,16 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
 
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
-        // The KES divisor, from fx_rates rather than a literal. Resolved per
-        // call, so a corrected rate reaches the dashboard on the next cache
-        // miss rather than the next deploy.
-        //
-        // sql.raw of a formatted number rather than an interpolated value.
-        // Drizzle would bind it as a parameter, and a bound divisor promotes
-        // `numeric / param` to double precision -- 1000/130 comes out
-        // ...076925 instead of ...076923, and that drift compounds through the
-        // SUM before the final ROUND. As a literal the division stays numeric.
-        // toFixed also guarantees the raw string is a number and nothing else.
-        const kesRate = sql.raw((await kesPerUsd()).toFixed(6));
-
+        // Only the revenue metric converts anything. Resolving the rate
+        // before the branch spent a tenant-scoped query on every
+        // booking-count request, warned about a missing rate that request
+        // did not need, and let a lookup failure stop a query with no
+        // currency in it.
         const result =
           metric === 'revenue'
-            ? await withTenantDb((tx) =>
-                tx.execute(sql`
+            ? await withTenantDb(async (tx) => {
+                const kesRate = sql.raw((await kesPerUsd()).toFixed(6));
+                return tx.execute(sql`
         SELECT 
           t.id,
           t.title as name,
@@ -1280,8 +1274,8 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
         GROUP BY t.id, t.title
         ORDER BY value DESC
         LIMIT 5;
-      `)
-              )
+      `);
+              })
             : await withTenantDb((tx) =>
                 tx.execute(sql`
         SELECT 

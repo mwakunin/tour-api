@@ -4,8 +4,36 @@
 // here had no coverage at all: what Safaricom is actually asked to collect,
 // and whether what it reports back is checked against it.
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  jest,
+} from '@jest/globals';
 import { eq } from 'drizzle-orm';
+
+// handleMpesaCallback now asks Safaricom to confirm the push before it
+// completes anything, so these have to control that answer. Daraja is reached
+// only through axios — .get for the OAuth token, .post for the status query —
+// so mocking the module is enough, and it keeps the service under test real.
+const axiosGet = jest.fn(async () => ({
+  data: { access_token: 'test-access-token' },
+}));
+const axiosPost = jest.fn(async () => ({
+  data: {
+    ResultCode: '0',
+    ResultDesc: 'The service request is processed successfully.',
+  },
+}));
+
+jest.unstable_mockModule('axios', () => ({
+  default: { get: axiosGet, post: axiosPost },
+  get: axiosGet,
+  post: axiosPost,
+}));
 
 import { db, initDatabase } from '#config/database.js';
 import { appPool } from '#config/appDatabase.js';
@@ -20,10 +48,11 @@ import {
   allocations,
   ledger_entries,
 } from '#models/schema.js';
-import {
-  chargeableCents,
-  handleMpesaCallback,
-} from '#services/mpesa.service.js';
+// Dynamic, and after the mock is registered — a static import of anything
+// that transitively pulls in axios would bind the real one first. See the ESM
+// mocking note in CLAUDE.md.
+const { chargeableCents, handleMpesaCallback } =
+  await import('#services/mpesa.service.js');
 
 const asTenant = (fn) => runWithTenant(SEED_TENANT_ID, fn);
 
@@ -130,6 +159,17 @@ describe('M-Pesa', () => {
     await appPool.end({ timeout: 5 });
   });
 
+  beforeEach(() => {
+    axiosGet.mockClear();
+    axiosPost.mockClear();
+    axiosPost.mockResolvedValue({
+      data: {
+        ResultCode: '0',
+        ResultDesc: 'The service request is processed successfully.',
+      },
+    });
+  });
+
   describe('what the customer is charged', () => {
     it('rounds a part-shilling amount up, never down', () => {
       // Daraja takes whole shillings. Rounding to nearest sent 100.40 as 100,
@@ -145,6 +185,83 @@ describe('M-Pesa', () => {
       expect(chargeableCents('100.00')).toBe(10000);
       expect(chargeableCents('100')).toBe(10000);
       expect(chargeableCents('1.15')).toBe(200);
+    });
+  });
+
+  describe('whether Safaricom agrees it happened', () => {
+    // The endpoint is public — Safaricom has to be able to reach it — and
+    // Daraja does not sign STK callbacks, so there is nothing to verify on the
+    // request itself. Anyone who could POST a success payload naming a pending
+    // CheckoutRequestID used to get a booking confirmed for free, and the
+    // realistic attacker is the customer who started a real push, was handed
+    // the id, cancelled on their handset and replayed a success.
+    it('refuses a callback Safaricom does not confirm', async () => {
+      const booking = await seedBooking(10000);
+      const checkoutId = `ws_CO_forged_${Date.now()}`;
+      await seedPendingPayment(booking.id, 10000, checkoutId);
+
+      // 1032 is "request cancelled by user" — exactly what the query returns
+      // for a push the customer dismissed.
+      axiosPost.mockResolvedValue({
+        data: { ResultCode: '1032', ResultDesc: 'Request cancelled by user' },
+      });
+
+      const result = await asTenant(() =>
+        handleMpesaCallback(
+          callback(checkoutId, [
+            { Name: 'Amount', Value: 100 },
+            { Name: 'MpesaReceiptNumber', Value: 'FORGED0001' },
+            { Name: 'PhoneNumber', Value: 254712345678 },
+          ])
+        )
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('unconfirmed');
+
+      const [row] = await asTenant(() =>
+        withTenantDb((tx) =>
+          tx
+            .select()
+            .from(payments)
+            .where(eq(payments.checkout_request_id, checkoutId))
+        )
+      );
+      expect(row.status).toBe('pending');
+    });
+
+    it('completes nothing when Safaricom cannot be reached', async () => {
+      const booking = await seedBooking(10000);
+      const checkoutId = `ws_CO_down_${Date.now()}`;
+      await seedPendingPayment(booking.id, 10000, checkoutId);
+
+      axiosPost.mockRejectedValue(new Error('ETIMEDOUT'));
+
+      // Throws rather than returning, so the controller answers non-zero and
+      // Safaricom retries. A query that could not be reached is not a
+      // confirmation, and completing on a maybe is the whole thing being
+      // avoided.
+      await expect(
+        asTenant(() =>
+          handleMpesaCallback(
+            callback(checkoutId, [
+              { Name: 'Amount', Value: 100 },
+              { Name: 'MpesaReceiptNumber', Value: 'TIMEOUT001' },
+              { Name: 'PhoneNumber', Value: 254712345678 },
+            ])
+          )
+        )
+      ).rejects.toThrow();
+
+      const [row] = await asTenant(() =>
+        withTenantDb((tx) =>
+          tx
+            .select()
+            .from(payments)
+            .where(eq(payments.checkout_request_id, checkoutId))
+        )
+      );
+      expect(row.status).toBe('pending');
     });
   });
 
@@ -205,6 +322,28 @@ describe('M-Pesa', () => {
         )
       );
       expect(row.status).toBe('pending');
+    });
+
+    it('refuses a malformed amount instead of erroring', async () => {
+      const booking = await seedBooking(10000);
+      const checkoutId = `ws_CO_junk_${Date.now()}`;
+      await seedPendingPayment(booking.id, 10000, checkoutId);
+
+      const result = await asTenant(() =>
+        handleMpesaCallback(
+          callback(checkoutId, [
+            { Name: 'Amount', Value: 'one hundred' },
+            { Name: 'MpesaReceiptNumber', Value: 'SGH7JUNK01' },
+            { Name: 'PhoneNumber', Value: 254712345678 },
+          ])
+        )
+      );
+
+      // decimalToCents throws on anything that is not a decimal. Letting that
+      // escape answered the callback 500, so Safaricom retried a payload that
+      // will never parse rather than being told the amount was refused.
+      expect(result.success).toBe(false);
+      expect(result.status).toBe('mismatch');
     });
 
     it('refuses a success callback that reports no amount at all', async () => {

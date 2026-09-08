@@ -317,10 +317,54 @@ export const handleMpesaCallback = async (callbackData) => {
       //
       // Absent rather than wrong is refused too: a success callback with no
       // Amount is not something to complete on the assumption it matched.
-      const reportedCents =
-        reportedAmount === undefined || reportedAmount === null
-          ? null
-          : decimalToCents(String(reportedAmount));
+      // A malformed figure is a mismatch, not a server fault. decimalToCents
+      // throws on anything that is not a decimal, and letting that escape
+      // answered the callback with a 500 -- so Safaricom retried a payload
+      // that will never parse, forever, instead of being told the amount was
+      // refused.
+      let reportedCents = null;
+      if (reportedAmount !== undefined && reportedAmount !== null) {
+        try {
+          reportedCents = decimalToCents(String(reportedAmount));
+        } catch {
+          reportedCents = null;
+        }
+      }
+
+      // ASK SAFARICOM, DO NOT TAKE THE CALLBACK'S WORD.
+      //
+      // This endpoint is public — it has to be, Safaricom calls it — and
+      // Daraja does not sign STK callbacks, so there is no signature to
+      // check. Until now that meant anyone who could POST a success payload
+      // naming a pending CheckoutRequestID got a booking confirmed and a
+      // settlement recorded with no money behind it. The realistic attacker
+      // is not a stranger guessing: it is the customer who started a real
+      // push, was handed the CheckoutRequestID in the response, cancelled on
+      // their handset and replayed a success.
+      //
+      // The other two rails already establish trust rather than assuming it —
+      // Paystack verifies an HMAC over the raw bytes, and Pesapal ignores its
+      // callback body entirely and reads GetTransactionStatus. M-Pesa was the
+      // one that did neither. Same idea here, with the query API this file
+      // already speaks.
+      //
+      // A query that cannot be reached is not a confirmation, so it throws
+      // and the controller answers non-zero: Safaricom retries, the payment
+      // stays pending, and nothing is completed on a maybe.
+      const confirmation = await querySTKPushStatus(CheckoutRequestID);
+      if (String(confirmation?.ResultCode) !== '0') {
+        logger.error('M-Pesa callback not confirmed by Safaricom — refusing', {
+          paymentId: payment.id,
+          checkoutRequestId: CheckoutRequestID,
+          queriedResultCode: confirmation?.ResultCode,
+          queriedResultDesc: confirmation?.ResultDesc,
+        });
+        return {
+          success: false,
+          status: 'unconfirmed',
+          message: 'Safaricom does not report this payment as successful',
+        };
+      }
 
       if (reportedCents !== payment.amount_cents) {
         logger.error('M-Pesa amount mismatch — refusing to complete', {

@@ -27,7 +27,6 @@ import {
   timestamp,
   index,
   unique,
-  foreignKey,
 } from 'drizzle-orm/pg-core';
 
 import { ledgerOutboxOperationEnum } from './enums.model.js';
@@ -38,6 +37,11 @@ export const ledger_outbox = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
 
+    // One constraint, from .references() alone. An explicit foreignKey()
+    // beside it declares a SECOND one under a different name and with the
+    // default no-action delete — and since the generated migration only ever
+    // carried the inline one, the snapshot claimed two where the database had
+    // one.
     tenant_id: uuid('tenant_id')
       .references(() => tenants.id, { onDelete: 'restrict' })
       .notNull(),
@@ -97,11 +101,5 @@ export const ledger_outbox = pgTable(
       table.operation,
       table.subject_id
     ),
-
-    tenantFk: foreignKey({
-      columns: [table.tenant_id],
-      foreignColumns: [tenants.id],
-      name: 'ledger_outbox_tenant_fk',
-    }),
   })
 );

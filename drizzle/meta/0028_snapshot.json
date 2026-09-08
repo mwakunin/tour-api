@@ -1,5 +1,5 @@
 {
-  "id": "a33940bd-48f6-426a-945d-0182261c06c0",
+  "id": "47c16de1-7c9a-4756-b462-bc2d726f5089",
   "prevId": "86764434-8cf0-4660-b8c0-9811771b9275",
   "version": "7",
   "dialect": "postgresql",
@@ -1216,19 +1216,6 @@
             "id"
           ],
           "onDelete": "restrict",
-          "onUpdate": "no action"
-        },
-        "ledger_outbox_tenant_fk": {
-          "name": "ledger_outbox_tenant_fk",
-          "tableFrom": "ledger_outbox",
-          "tableTo": "tenants",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "no action",
           "onUpdate": "no action"
         }
       },
