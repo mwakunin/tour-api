@@ -122,3 +122,29 @@ export const invalidateCacheMiddleware = (patterns) => {
     next();
   };
 };
+
+/**
+ * Marks a response as uncacheable, anywhere.
+ *
+ * The opposite job to the two above, and in the same file because this is
+ * where a reader looks for how a route's caching is decided.
+ *
+ * Applied per ROUTER rather than per handler. The handler-by-handler version
+ * is what the money layer had — payables and settlements set it, the
+ * counterparty and supplier-invoice reads beside them did not — and the
+ * failure mode is not that somebody argued for the difference, it is that a
+ * route added later inherits nothing and nobody notices. On the router it
+ * covers every route in the file, including the ones not written yet.
+ *
+ * helmet() sets no cache policy of its own, so without this the response
+ * carries no Cache-Control at all and a shared proxy is free to apply its own
+ * heuristics to one operator's suppliers, invoices and outstanding balances.
+ *
+ * `no-store` rather than `no-cache`: no-cache permits storing the response and
+ * revalidating, which still writes the operator's commercial position to a
+ * disk cache somewhere.
+ */
+export const noStore = (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+};

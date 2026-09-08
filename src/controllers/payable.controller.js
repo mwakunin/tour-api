@@ -32,9 +32,9 @@ export const listPayablesController = async (req, res, next) => {
     const { id } = uuidParamSchema.parse(req.params);
     const payables = await listPayables(id);
 
-    // What the operator owes and to whom is their commercial position, and
-    // helmet sets no cache policy of its own.
-    res.set('Cache-Control', 'no-store');
+    // Cache-Control: no-store comes from the router — see noStore in
+    // cache.middleware.js. Setting it here as well is how the neighbouring
+    // reads ended up without it.
     res.json({ success: true, data: payables });
   } catch (error) {
     if (isZod(error)) return zodError(res, error);

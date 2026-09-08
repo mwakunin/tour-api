@@ -28,6 +28,7 @@ import {
   resolveTierForGroupSize,
 } from '#validations/tour.validation.js';
 import { decimalToCents } from '#utils/money.js';
+import { kesPerUsd } from '#services/reportingFx.service.js';
 
 /**
  * A rejection the customer can act on (bad dates, mismatched package) rather
@@ -859,6 +860,18 @@ export const getRevenueStats = async (_filters = {}) => {
     const cacheKey = CacheKeys.revenueStats();
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
+        // The KES divisor, from fx_rates rather than a literal. Resolved per
+        // call, so a corrected rate reaches the dashboard on the next cache
+        // miss rather than the next deploy.
+        //
+        // sql.raw of a formatted number rather than an interpolated value.
+        // Drizzle would bind it as a parameter, and a bound divisor promotes
+        // `numeric / param` to double precision -- 1000/130 comes out
+        // ...076925 instead of ...076923, and that drift compounds through the
+        // SUM before the final ROUND. As a literal the division stays numeric.
+        // toFixed also guarantees the raw string is a number and nothing else.
+        const kesRate = sql.raw((await kesPerUsd()).toFixed(6));
+
         // Get monthly data for last 12 months
         const monthlyData = await withTenantDb((tx) =>
           tx.execute(sql`
@@ -867,13 +880,13 @@ export const getRevenueStats = async (_filters = {}) => {
               TO_CHAR(DATE_TRUNC('month', created_at), 'Mon') as month,
               DATE_TRUNC('month', created_at) as month_date,
               SUM(CASE
-                WHEN currency = 'KES' THEN total_price / 130.0
+                WHEN currency = 'KES' THEN total_price / ${kesRate}
                 ELSE total_price
               END) as revenue,
               COUNT(*) as bookings,
               -- ✅ NEW: Track average price per person
               AVG(CASE
-                WHEN currency = 'KES' THEN COALESCE(price_per_person, total_price / NULLIF(group_size, 0)) / 130.0
+                WHEN currency = 'KES' THEN COALESCE(price_per_person, total_price / NULLIF(group_size, 0)) / ${kesRate}
                 ELSE COALESCE(price_per_person, total_price / NULLIF(group_size, 0))
               END) as avg_price_per_person,
               -- ✅ NEW: Track total people (guests)

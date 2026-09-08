@@ -116,6 +116,17 @@ mechanism. `bookings`, `tours`, `payments` and the rest join the policy set in
 the change that moves their handlers onto `withTenantDb` and drops the
 `tenant_id` DEFAULT.
 
+**Failed accruals are filed, not just logged.** `bookingLedger` stays forgiving
+— a booking must not fail because its accrual did — but the failure now writes
+a `ledger_outbox` row as well as a log line. `GET /api/ledger-outbox` is the
+worklist; `POST /api/ledger-outbox/drain` retries it. There is no scheduler in
+this repo, so draining is something an admin or an external cron asks for.
+Retrying is only safe because the two obligation raisers are idempotent: they
+return the existing open obligations rather than accruing again, and migration
+0028's partial unique index on `(tenant_id, source_type, source_id, direction,
+kind) WHERE status = 'open'` is what makes that hold under concurrency. **Do
+not add a code path that raises a second open accrual for one booking.**
+
 **Deposit policy is per-tenant, and null by default.** `tenants.deposit_percent_bps`
 and `tenants.balance_due_days_before_departure` drive whether
 `raiseBookingReceivable` posts one full-amount receivable or a deposit/balance

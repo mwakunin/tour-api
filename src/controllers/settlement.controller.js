@@ -41,9 +41,8 @@ export const listUnmatchedController = async (req, res, next) => {
     const filters = validateUnmatchedQuery(req.query);
     const { data, total, page, limit } = await listUnmatched(filters);
 
-    // Money that has moved and is not yet accounted for is the operator's
-    // commercial position, and helmet sets no cache policy of its own.
-    res.set('Cache-Control', 'no-store');
+    // Cache-Control: no-store comes from the router — see noStore in
+    // cache.middleware.js.
     res.json({ success: true, data, count: data.length, total, page, limit });
   } catch (error) {
     if (isZod(error)) return zodError(res, error);

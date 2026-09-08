@@ -90,6 +90,37 @@ describe('Counterparty API Integration Tests', () => {
     });
   });
 
+  describe('cache policy', () => {
+    // Set on the router, not the handler. The per-handler version of this is
+    // how payables and settlements ended up with it while the counterparty and
+    // supplier-invoice reads beside them did not.
+    it('marks every read on this router no-store', async () => {
+      const created = track(
+        (await adminAgent.post('/api/counterparties').send(supplier())).body
+      );
+
+      for (const path of [
+        '/api/counterparties',
+        `/api/counterparties/${created.data.id}`,
+        `/api/counterparties/${created.data.id}/payables`,
+      ]) {
+        const response = await adminAgent.get(path).expect(200);
+        expect(response.headers['cache-control']).toBe('no-store');
+      }
+    });
+
+    it('marks a rejected read no-store too', async () => {
+      // The header comes before the handler runs, so it is on the 404 as well
+      // — a response body that says which ids do not exist is still the
+      // operator's data.
+      const response = await adminAgent
+        .get('/api/counterparties/11111111-2222-4333-8444-555555555555')
+        .expect(404);
+
+      expect(response.headers['cache-control']).toBe('no-store');
+    });
+  });
+
   describe('POST /api/counterparties', () => {
     it('creates a supplier', async () => {
       const response = await adminAgent

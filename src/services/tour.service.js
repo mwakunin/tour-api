@@ -30,6 +30,7 @@ import { cache } from '#utils/cache.js';
 import { CacheKeys } from '#utils/cacheKeys.js';
 import { withRetry } from '#utils/dbRetry.js';
 import logger from '#config/logger.js';
+import { kesPerUsd } from '#services/reportingFx.service.js';
 
 // ============= PRICING SQL FRAGMENTS =============
 // Tiers live nested inside pricing_periods, so every price predicate needs a
@@ -1250,15 +1251,21 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
 
     return await cache.wrap(cacheKey, 600, () => {
       return withRetry(async () => {
+        // Only the revenue metric converts anything. Resolving the rate
+        // before the branch spent a tenant-scoped query on every
+        // booking-count request, warned about a missing rate that request
+        // did not need, and let a lookup failure stop a query with no
+        // currency in it.
         const result =
           metric === 'revenue'
-            ? await withTenantDb((tx) =>
-                tx.execute(sql`
+            ? await withTenantDb(async (tx) => {
+                const kesRate = sql.raw((await kesPerUsd()).toFixed(6));
+                return tx.execute(sql`
         SELECT 
           t.id,
           t.title as name,
           SUM(CASE 
-            WHEN b.currency = 'KES' THEN b.total_price / 130.0
+            WHEN b.currency = 'KES' THEN b.total_price / ${kesRate}
             ELSE b.total_price 
           END) as value
         FROM tours t
@@ -1267,8 +1274,8 @@ export const getTopPerformingTours = async (metric = 'bookings') => {
         GROUP BY t.id, t.title
         ORDER BY value DESC
         LIMIT 5;
-      `)
-              )
+      `);
+              })
             : await withTenantDb((tx) =>
                 tx.execute(sql`
         SELECT 

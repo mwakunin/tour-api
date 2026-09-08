@@ -18,6 +18,13 @@ import {
   cleanupTestSession,
 } from '../helpers/auth.helper.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
+import { runWithTenant } from '#config/tenantContext.js';
+import {
+  kesPerUsd,
+  LEGACY_KES_PER_USD,
+} from '#services/reportingFx.service.js';
+
+const asSeedTenant = (fn) => runWithTenant(SEED_TENANT_ID, fn);
 
 describe('FX Rate API Integration Tests', () => {
   let agent;
@@ -315,6 +322,92 @@ describe('FX Rate API Integration Tests', () => {
       await adminAgent
         .delete('/api/fx-rates/00000000-0000-0000-0000-0000000000cc')
         .expect(404);
+    });
+  });
+
+  describe('the reporting divisor', () => {
+    // The four reporting queries divided KES totals by a literal 130.0. This
+    // is where that number lives now, so these pin that the reports follow the
+    // table rather than a constant somebody typed once.
+    const ownRates = [];
+
+    afterEach(async () => {
+      while (ownRates.length) {
+        await db.delete(fx_rates).where(eq(fx_rates.id, ownRates.pop()));
+      }
+    });
+
+    it('falls back to the legacy default when nothing is loaded', async () => {
+      // 130, which is what the four literals said, so the dashboards read the
+      // same as they did before this change.
+      //
+      // The fallback lives here and not in fx_rates on purpose. Seeding a
+      // shared 130 was the first attempt, and it made toBaseCents convert a
+      // USD invoice at an invented rate instead of refusing — the 'no rate on
+      // or before the date' test above is that guard, and it caught it.
+      await expect(asSeedTenant(() => kesPerUsd())).resolves.toBe(
+        LEGACY_KES_PER_USD
+      );
+    });
+
+    it('falls back when the lookup itself fails', async () => {
+      // Outside a tenant context, so withTenantDb rejects rather than
+      // returning no rows. A failed lookup and an empty one are the same
+      // question unanswered; only the empty half used to fall back, so a
+      // transient error took out three dashboards instead of showing the
+      // figure they showed yesterday.
+      await expect(kesPerUsd()).resolves.toBe(LEGACY_KES_PER_USD);
+    });
+
+    it('follows a newer shared rate', async () => {
+      const [newer] = await db
+        .insert(fx_rates)
+        .values({
+          tenant_id: null,
+          base_currency: 'USD',
+          quote_currency: 'KES',
+          rate_ppm: 141_500_000,
+          as_of: '2026-01-02',
+          source: 'reporting-divisor-test',
+        })
+        .returning();
+      ownRates.push(newer.id);
+
+      await expect(asSeedTenant(() => kesPerUsd())).resolves.toBe(141.5);
+    });
+
+    it("prefers the operator's own rate over the shared one", async () => {
+      const asOf = '2026-01-03';
+      const [shared] = await db
+        .insert(fx_rates)
+        .values({
+          tenant_id: null,
+          base_currency: 'USD',
+          quote_currency: 'KES',
+          rate_ppm: 150_000_000,
+          as_of: asOf,
+          source: 'reporting-divisor-test',
+        })
+        .returning();
+      ownRates.push(shared.id);
+
+      const [own] = await db
+        .insert(fx_rates)
+        .values({
+          tenant_id: SEED_TENANT_ID,
+          base_currency: 'USD',
+          quote_currency: 'KES',
+          rate_ppm: 145_000_000,
+          as_of: asOf,
+          source: 'reporting-divisor-test',
+        })
+        .returning();
+      ownRates.push(own.id);
+
+      // Both rates share a date, so the tie is broken on tenant_id. Postgres
+      // sorts NULLs FIRST in DESC, which without an explicit NULLS LAST hands
+      // the operator the shared rate instead of the one they contracted.
+      await expect(asSeedTenant(() => kesPerUsd())).resolves.toBe(145);
     });
   });
 
