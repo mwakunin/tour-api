@@ -93,6 +93,15 @@ const formatPhoneNumber = (phone) => {
 /**
  * Initiate STK Push
  */
+/**
+ * What Safaricom will actually take, in cents, for a KES amount.
+ *
+ * Rounded UP to a whole shilling, and the ceiling taken in integer cents.
+ * Exported for the tests that pin both halves.
+ */
+export const chargeableCents = (amount) =>
+  Math.ceil(decimalToCents(amount) / 100) * 100;
+
 export const initiateSTKPush = async ({
   bookingId,
   phoneNumber,
@@ -132,7 +141,20 @@ export const initiateSTKPush = async ({
     // Daraja only accepts whole shillings, so this is the figure the customer
     // is actually charged. Persist that same value rather than the unrounded
     // input — otherwise the settlement records an amount that never moved.
-    const chargedAmount = Math.round(parseFloat(amount));
+    //
+    // UP, not to nearest. Math.round sent a 100.40 booking to Safaricom as
+    // 100, and the callback then marked the booking paid with 40 cents still
+    // owed — the receivable said one thing and payment_status said another.
+    // Rounding up can only overpay, and an overpayment is something the money
+    // layer already has an answer for: the excess stays unallocated on the
+    // settlement and surfaces in the unmatched worklist.
+    //
+    // Ceiling taken in integer cents rather than on the float. Math.ceil of a
+    // parseFloat is at the mercy of the artifact that makes 1.15 * 100 come
+    // out as 114.99999999999999, and here it would round a whole-shilling
+    // amount up to the next one.
+    const chargedCents = chargeableCents(amount);
+    const chargedAmount = chargedCents / 100;
 
     const [payment] = await withTenantDb((tx) =>
       tx
@@ -140,8 +162,7 @@ export const initiateSTKPush = async ({
         .values({
           tenant_id: currentTenantId(),
           booking_id: bookingId,
-          // Whole shillings, so this is exact.
-          amount_cents: decimalToCents(chargedAmount.toString()),
+          amount_cents: chargedCents,
           currency: 'KES',
           payment_method: 'mpesa',
           mpesa_phone_number: formattedPhone,
@@ -284,6 +305,36 @@ export const handleMpesaCallback = async (callbackData) => {
       const phoneNumber = metadata.find(
         (item) => item.Name === 'PhoneNumber'
       )?.Value;
+      const reportedAmount = metadata.find(
+        (item) => item.Name === 'Amount'
+      )?.Value;
+
+      // Confirm Safaricom is telling us about the money we asked for. Paystack
+      // and Pesapal both do this; M-Pesa did not, and read no Amount from the
+      // callback at all — so a callback reporting any figure marked the
+      // booking paid for whatever it said. One rail out of three without the
+      // check is the pair-that-drifts shape, not a considered difference.
+      //
+      // Absent rather than wrong is refused too: a success callback with no
+      // Amount is not something to complete on the assumption it matched.
+      const reportedCents =
+        reportedAmount === undefined || reportedAmount === null
+          ? null
+          : decimalToCents(String(reportedAmount));
+
+      if (reportedCents !== payment.amount_cents) {
+        logger.error('M-Pesa amount mismatch — refusing to complete', {
+          paymentId: payment.id,
+          checkoutRequestId: CheckoutRequestID,
+          expectedCents: payment.amount_cents,
+          reportedCents,
+        });
+        return {
+          success: false,
+          status: 'mismatch',
+          message: 'Reported payment does not match the recorded amount',
+        };
+      }
 
       // All three writes in one transaction: the payment claim, the booking
       // confirmation, and the settlement that records the money in the ledger.

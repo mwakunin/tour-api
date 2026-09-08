@@ -6,6 +6,9 @@ import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 // Mock M-Pesa service using ESM-native mocking (jest.mock() doesn't
 // reliably intercept native ESM imports under --experimental-vm-modules)
 jest.unstable_mockModule('#services/mpesa.service.js', () => ({
+  // Every real export has to be listed, even ones this suite does not use --
+  // omitting one throws 'does not provide an export named X'. See CLAUDE.md.
+  chargeableCents: jest.fn((amount) => Math.ceil(Number(amount)) * 100),
   initiateSTKPush: jest.fn(async ({ bookingId }) => ({
     success: true,
     message: 'STK push sent to customer phone',
