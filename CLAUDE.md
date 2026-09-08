@@ -116,6 +116,15 @@ mechanism. `bookings`, `tours`, `payments` and the rest join the policy set in
 the change that moves their handlers onto `withTenantDb` and drops the
 `tenant_id` DEFAULT.
 
+**Deposit policy is per-tenant, and null by default.** `tenants.deposit_percent_bps`
+and `tenants.balance_due_days_before_departure` drive whether
+`raiseBookingReceivable` posts one full-amount receivable or a deposit/balance
+pair. Null means one, which is what every operator does today. **There is no
+endpoint to set them** — deposit terms belong to the tenancy product, which is
+not built, so it is an owner-plane `UPDATE` and the CHECK constraints on
+`tenants` are the only validation. The balance leg is always `total - deposit`,
+never a second percentage, so the two sum to the booking exactly.
+
 **Two connections, on purpose.** `FORCE ROW LEVEL SECURITY` still exempts a
 table's owner, so an app connecting as the owner has decorative policies.
 `database.js` (`DATABASE_URL`, owner) is for migrations and the owner plane;

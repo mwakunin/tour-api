@@ -1,4 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  afterEach,
+} from '@jest/globals';
 import { eq } from 'drizzle-orm';
 
 import { db } from '#config/database.js';
@@ -6,6 +13,7 @@ import { appPool } from '#config/appDatabase.js';
 import { runWithTenant, withTenantDb } from '#config/tenantContext.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import {
+  tenants,
   tours,
   bookings,
   payments,
@@ -118,12 +126,15 @@ describe('booking -> money layer bridge', () => {
     const booking = await seedBooking('4200.00');
     created.push(booking.id);
 
-    const obligation = await asTenant(() =>
+    const raised = await asTenant(() =>
       bookingLedger.raiseBookingReceivable(booking)
     );
 
-    expect(obligation).not.toBeNull();
+    // One obligation, because the seeded tenant has no deposit policy.
+    expect(raised).toHaveLength(1);
+    const [obligation] = raised;
     expect(obligation.direction).toBe('receivable');
+    expect(obligation.kind).toBe('full');
     expect(obligation.amount_cents).toBe(420000); // "4200.00" -> cents, exactly
     expect(obligation.source_type).toBe('booking');
   });
@@ -132,7 +143,7 @@ describe('booking -> money layer bridge', () => {
     const booking = await seedBooking('1000.00');
     created.push(booking.id);
 
-    const obligation = await asTenant(() =>
+    const [obligation] = await asTenant(() =>
       bookingLedger.raiseBookingReceivable(booking)
     );
 
@@ -175,7 +186,7 @@ describe('booking -> money layer bridge', () => {
     const result = await asTenant(() =>
       bookingLedger.raiseBookingReceivable(booking)
     );
-    expect(result).toBeNull();
+    expect(result).toEqual([]);
   });
 
   it('voids open receivables when a booking is cancelled', async () => {
@@ -189,6 +200,145 @@ describe('booking -> money layer bridge', () => {
 
     expect(voided).toHaveLength(1);
     expect(voided[0].status).toBe('void');
+  });
+
+  describe('with a deposit policy configured', () => {
+    // Set on the seeded tenant and cleared afterwards. Owner-plane, because
+    // deposit terms are operator configuration and the runtime role is not
+    // allowed to write them.
+    const setPolicy = async (bps, daysBefore) =>
+      db
+        .update(tenants)
+        .set({
+          deposit_percent_bps: bps,
+          balance_due_days_before_departure: daysBefore,
+        })
+        .where(eq(tenants.id, SEED_TENANT_ID));
+
+    afterEach(() => setPolicy(null, null));
+
+    it('splits the booking into a deposit and a balance that sum to it', async () => {
+      await setPolicy(3000, 30); // 30% now, balance 30 days before departure
+      const booking = await seedBooking('1000.00');
+      created.push(booking.id);
+
+      const raised = await asTenant(() =>
+        bookingLedger.raiseBookingReceivable(booking)
+      );
+
+      expect(raised).toHaveLength(2);
+      const [deposit, balance] = raised;
+
+      expect(deposit.kind).toBe('deposit');
+      expect(deposit.amount_cents).toBe(30000);
+      expect(balance.kind).toBe('balance');
+      expect(balance.amount_cents).toBe(70000);
+
+      // The property that matters more than either figure: nothing is lost
+      // between the two legs.
+      expect(deposit.amount_cents + balance.amount_cents).toBe(100000);
+
+      // start_date is 2026-11-10; 30 days earlier is 2026-10-11.
+      expect(balance.due_on).toBe('2026-10-11');
+      // Explicitly dated, not null — a null due_on sorts LAST in ASC, so the
+      // customer's first payment would be spent on the balance leg.
+      expect(deposit.due_on).not.toBeNull();
+      expect(deposit.due_on < balance.due_on).toBe(true);
+    });
+
+    it('leaves no cent unassigned when the split does not divide evenly', async () => {
+      // 50% of an odd number of cents lands exactly on half a cent, so
+      // rounding half up takes it. A balance computed as its own percentage
+      // rounds the other half up too and the pair overcharges by a cent; as
+      // the remainder it cannot. This case was chosen because it is one of the
+      // few that tells the two apart — 3333 bps of the same total does not.
+      await setPolicy(5000, 30);
+      const booking = await seedBooking('100.01');
+      created.push(booking.id);
+
+      const [deposit, balance] = await asTenant(() =>
+        bookingLedger.raiseBookingReceivable(booking)
+      );
+
+      expect(deposit.amount_cents).toBe(5001);
+      expect(balance.amount_cents).toBe(5000);
+      expect(deposit.amount_cents + balance.amount_cents).toBe(10001);
+    });
+
+    it('spends the first payment on the deposit, not the balance', async () => {
+      await setPolicy(3000, 30);
+      const booking = await seedBooking('1000.00');
+      created.push(booking.id);
+
+      const [deposit] = await asTenant(() =>
+        bookingLedger.raiseBookingReceivable(booking)
+      );
+
+      const payment = await seedPayment(booking.id, '300.00', {
+        mpesa_receipt_number: `DEP${Date.now().toString(36).slice(-7)}`,
+      });
+      await asTenant(() =>
+        bookingLedger.recordBookingSettlement({ payment, booking })
+      );
+
+      const rows = await asTenant(() =>
+        withTenantDb((tx) =>
+          tx
+            .select()
+            .from(allocations)
+            .where(eq(allocations.obligation_id, deposit.id))
+        )
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].amount_cents).toBe(30000);
+    });
+
+    it('clamps a balance date that has already passed to today', async () => {
+      // A booking made inside the notice period. The balance is genuinely due
+      // now; backdating it would only make it look overdue for longer.
+      await setPolicy(3000, 3650);
+      const booking = await seedBooking('1000.00');
+      created.push(booking.id);
+
+      const [, balance] = await asTenant(() =>
+        bookingLedger.raiseBookingReceivable(booking)
+      );
+
+      expect(balance.due_on).toBe(new Date().toISOString().slice(0, 10));
+    });
+
+    it('raises one obligation when the percentage rounds away', async () => {
+      // 1 bps of 2 cents rounds to nothing, so there is no first leg and
+      // therefore no schedule. Falls back rather than posting a zero.
+      await setPolicy(1, 30);
+      const booking = await seedBooking('0.02');
+      created.push(booking.id);
+
+      const raised = await asTenant(() =>
+        bookingLedger.raiseBookingReceivable(booking)
+      );
+
+      expect(raised).toHaveLength(1);
+      expect(raised[0].kind).toBe('full');
+      expect(raised[0].amount_cents).toBe(2);
+    });
+
+    it('voids both legs when the booking is cancelled', async () => {
+      await setPolicy(3000, 30);
+      const booking = await seedBooking('1000.00');
+      created.push(booking.id);
+
+      await asTenant(() => bookingLedger.raiseBookingReceivable(booking));
+      const voided = await asTenant(() =>
+        bookingLedger.voidBookingObligations(booking.id)
+      );
+
+      // voidBookingObligations was never filtered by kind, so this passes for
+      // the same reason it passed with one obligation. Pinned because a
+      // schedule is exactly the thing that would tempt someone to filter.
+      expect(voided).toHaveLength(2);
+      expect(voided.every((row) => row.status === 'void')).toBe(true);
+    });
   });
 
   it('leaves a settlement unallocated when it matches no booking', async () => {

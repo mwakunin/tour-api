@@ -8,13 +8,16 @@
 // billing, a tenant switcher — is not built yet. Footloose runs as a single
 // seeded row and nothing user-facing says the word "tenant".
 
+import { sql } from 'drizzle-orm';
 import {
   pgTable,
   uuid,
   text,
   varchar,
   timestamp,
+  integer,
   index,
+  check,
 } from 'drizzle-orm/pg-core';
 import {
   currencyEnum,
@@ -65,6 +68,27 @@ export const tenants = pgTable(
     mpesa_credentials: text('mpesa_credentials'),
     pesapal_credentials: text('pesapal_credentials'),
 
+    // DEPOSIT POLICY. Null means no schedule: a booking raises one
+    // receivable for the full amount, which is what every operator does today
+    // and what this did before the columns existed.
+    //
+    // Basis points, like counterparties.commission_rate_bps, so a 30% deposit
+    // is 3000 and the split is integer arithmetic end to end. A percentage
+    // stored as a decimal would put a float between a customer and what they
+    // are asked to pay.
+    //
+    // There is no endpoint to set this. Deposit terms are operator
+    // configuration and the tenancy product that would own that screen is not
+    // built, so it is an owner-plane UPDATE for now — deliberately, rather
+    // than shipping a number nobody chose as a default.
+    deposit_percent_bps: integer('deposit_percent_bps'),
+
+    // How many days before departure the balance falls due. Null with a
+    // deposit set means the balance is due on the departure date itself.
+    balance_due_days_before_departure: integer(
+      'balance_due_days_before_departure'
+    ),
+
     status: tenantStatusEnum('status').default('active').notNull(),
 
     created_at: timestamp('created_at', { withTimezone: true })
@@ -77,5 +101,30 @@ export const tenants = pgTable(
   (table) => ({
     slugIdx: index('tenants_slug_idx').on(table.slug),
     statusIdx: index('tenants_status_idx').on(table.status),
+
+    // No endpoint sets the deposit policy, so these constraints are not a
+    // second opinion about what validation already checked — they are the only
+    // check there is, and the operator writing the UPDATE by hand is exactly
+    // who they are for.
+    //
+    // Open interval on purpose. 0 bps is "no deposit", which is what NULL
+    // already means, and 10000 bps is the whole booking, which leaves a
+    // zero-cent balance leg that assertAmountCents rejects. Both are spelled
+    // by leaving the column NULL.
+    depositRangeCk: check(
+      'tenants_deposit_percent_bps_range',
+      sql`${table.deposit_percent_bps} IS NULL OR (${table.deposit_percent_bps} > 0 AND ${table.deposit_percent_bps} < 10000)`
+    ),
+    balanceDaysCk: check(
+      'tenants_balance_due_days_non_negative',
+      sql`${table.balance_due_days_before_departure} IS NULL OR ${table.balance_due_days_before_departure} >= 0`
+    ),
+    // A balance date with no deposit percentage is a half-written policy: it
+    // says when the balance falls due without saying what the balance is.
+    // Rejected rather than ignored, because ignoring it looks like it worked.
+    balanceNeedsDepositCk: check(
+      'tenants_balance_days_needs_deposit',
+      sql`${table.balance_due_days_before_departure} IS NULL OR ${table.deposit_percent_bps} IS NOT NULL`
+    ),
   })
 );
