@@ -498,6 +498,71 @@ describe('Booking API Integration Tests', () => {
     });
   });
 
+  describe('GET /api/bookings/:id/pnl - Booking P&L', () => {
+    let adminAgent;
+    let testAdmin;
+
+    beforeEach(async () => {
+      const adminAuth = await createAuthenticatedAdminAgent(app);
+      adminAgent = adminAuth.agent;
+      testAdmin = adminAuth.user;
+    });
+
+    afterEach(async () => {
+      await deleteTestAdmin(testAdmin.id);
+    });
+
+    // Created through the API, like every other booking in this suite, so the
+    // receivable is raised the way it is in production rather than by an
+    // insert that skips the ledger.
+    const newBooking = async () => {
+      const response = await agent.post('/api/bookings').send({
+        tour_id: testTour.id,
+        selected_tier_index: 0,
+        group_size: 2,
+        start_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split('T')[0],
+        end_date: new Date(Date.now() + 33 * 24 * 60 * 60 * 1000)
+          .toISOString()
+          .split('T')[0],
+        customer_name: 'John Doe',
+        customer_email: 'john@example.com',
+        customer_phone: '+254700000000',
+        country: 'KE',
+      });
+      return response.body.data.id;
+    };
+
+    it('tells caches not to keep the figures', async () => {
+      const bookingId = await newBooking();
+      const response = await adminAgent
+        .get(`/api/bookings/${bookingId}/pnl`)
+        .expect(200);
+
+      // What a trip made is the operator's commercial position, and helmet
+      // sets no cache policy of its own — without this a shared cache or a
+      // browser on a shared machine can hold it past the session that was
+      // allowed to see it.
+      expect(response.headers['cache-control']).toBe('no-store');
+      expect(response.body.data).toHaveProperty('margin');
+    });
+
+    it('answers 400 for a malformed id rather than 500', async () => {
+      await adminAgent.get('/api/bookings/not-a-uuid/pnl').expect(400);
+    });
+
+    it('fails without authentication', async () => {
+      const bookingId = await newBooking();
+      await request(app).get(`/api/bookings/${bookingId}/pnl`).expect(401);
+    });
+
+    it('fails for a non-admin', async () => {
+      const bookingId = await newBooking();
+      await agent.get(`/api/bookings/${bookingId}/pnl`).expect(403);
+    });
+  });
+
   describe('GET /api/bookings/stats/trends - Get Booking Trends', () => {
     let adminAgent;
     let testAdmin;

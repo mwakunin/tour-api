@@ -551,6 +551,12 @@ export const getBookingPnlController = async (req, res, next) => {
     // 400.
     const { id } = uuidParamSchema.parse(req.params);
     const pnl = await bookingPnl(id);
+
+    // What a trip made is the operator's commercial position. Helmet sets no
+    // cache policy, and without one a shared cache or a browser is free to
+    // keep an authenticated JSON response around — on a shared machine that
+    // outlives the session that was allowed to see it.
+    res.set('Cache-Control', 'no-store');
     res.json({ success: true, data: pnl });
   } catch (error) {
     if (error.name === 'ZodError') {

@@ -1,6 +1,7 @@
 // src/validations/supplierInvoice.validation.js
 import { z } from 'zod';
 import { paginationSchema } from './common.js';
+import { decimalToCents } from '#utils/money.js';
 
 const CURRENCIES = ['USD', 'KES'];
 
@@ -25,7 +26,19 @@ const amountString = z
   .string()
   .trim()
   .regex(/^\d+(\.\d{1,2})?$/, 'Amount must be a decimal, e.g. "1250.00"')
-  .refine((v) => Number(v) > 0, 'Amount must be greater than zero');
+  .refine((v) => Number(v) > 0, 'Amount must be greater than zero')
+  // The conversion itself is the check, rather than a bound copied from it.
+  // A separate limit here would be a second opinion about what fits in a
+  // number, and the two would eventually disagree — this cannot, because it
+  // is the same function the service calls a moment later.
+  .refine((v) => {
+    try {
+      decimalToCents(v);
+      return true;
+    } catch {
+      return false;
+    }
+  }, 'Amount is larger than this system can represent exactly');
 
 export const supplierInvoiceCreateSchema = z.object({
   counterparty_id: z.string().uuid('counterparty_id must be a UUID'),

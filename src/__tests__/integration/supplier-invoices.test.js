@@ -248,6 +248,35 @@ describe('Supplier Invoice API Integration Tests', () => {
       expect(response.status).toBe(404);
     });
 
+    it('refuses an amount larger than cents can hold exactly', async () => {
+      const supplier = await newSupplier();
+
+      // 90071992547409.93 is 9007199254740993 cents, one past what a JS
+      // number holds exactly. It used to round to ...992 — a different amount
+      // — and only be caught downstream by the money layer, so the caller got
+      // an error about an amount they never sent.
+      const response = await adminAgent.post('/api/supplier-invoices').send({
+        counterparty_id: supplier.id,
+        invoice_number: `INV-HUGE-${Date.now()}`,
+        issued_on: '2026-11-01',
+        amount: '90071992547409.93',
+      });
+
+      expect(response.status).toBe(400);
+    });
+
+    it('accepts the largest amount that is still exact', async () => {
+      const supplier = await newSupplier();
+      const response = await newInvoice(supplier, {
+        amount: '90071992547409.91',
+      });
+
+      // 9007199254740991 cents is Number.MAX_SAFE_INTEGER — the boundary is
+      // the last exact value, not a round number picked nearby.
+      expect(response.status).toBe(201);
+      expect(response.body.data.amount_cents).toBe(9007199254740991);
+    });
+
     it('refuses an amount that is not a positive decimal', async () => {
       const supplier = await newSupplier();
       for (const amount of ['0', '-5.00', 'abc', '1.234']) {
