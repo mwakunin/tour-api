@@ -765,10 +765,29 @@ export const allocate = ({
  * are all the same walk down this list — which is the whole reason allocations
  * is a table rather than a column on either side.
  */
-export const applySettlement = async (
-  settlementId,
-  { sourceType, sourceId }
-) => {
+export const applySettlement = async (settlementId, target = {}) => {
+  const { sourceType, sourceId, counterpartyId } = target;
+
+  // Exactly one way of naming what this settlement is for.
+  //
+  // A customer's payment settles one booking, so it is addressed by source. A
+  // payment to a lodge is a lump sum against whatever that supplier is owed,
+  // so it is addressed by counterparty and spread oldest-due-first.
+  //
+  // Neither is not a default. With no predicate at all the query below matches
+  // every open obligation of the right direction and currency, and a single
+  // supplier payment would quietly clear unrelated debts across the whole
+  // tenant. Refused rather than defaulted.
+  const bySource = Boolean(sourceType && sourceId);
+  const byCounterparty = Boolean(counterpartyId);
+
+  if (bySource === byCounterparty) {
+    throw new Error(
+      '[money] applySettlement needs either { sourceType, sourceId } or ' +
+        '{ counterpartyId }, and exactly one of them'
+    );
+  }
+
   const targets = await withTenantDb(async (tx) => {
     const [settlement] = await tx
       .select()
@@ -779,19 +798,32 @@ export const applySettlement = async (
       throw new Error(`[money] settlement ${settlementId} not found`);
 
     const direction = settlement.direction === 'in' ? 'receivable' : 'payable';
-    return tx
-      .select()
-      .from(obligations)
-      .where(
-        and(
-          eq(obligations.direction, direction),
-          eq(obligations.status, 'open'),
-          eq(obligations.currency, settlement.currency),
-          eq(obligations.source_type, sourceType),
-          eq(obligations.source_id, sourceId)
-        )
-      )
-      .orderBy(obligations.due_on, obligations.created_at);
+
+    const conditions = [
+      eq(obligations.direction, direction),
+      eq(obligations.status, 'open'),
+      // Same currency only. allocate refuses a cross-currency pair anyway;
+      // filtering here means a USD settlement skips KES invoices rather than
+      // failing on the first one it meets.
+      eq(obligations.currency, settlement.currency),
+    ];
+
+    if (byCounterparty) {
+      conditions.push(eq(obligations.counterparty_id, counterpartyId));
+    } else {
+      conditions.push(eq(obligations.source_type, sourceType));
+      conditions.push(eq(obligations.source_id, sourceId));
+    }
+
+    return (
+      tx
+        .select()
+        .from(obligations)
+        .where(and(...conditions))
+        // Oldest due first: paying a supplier clears what has been owed longest,
+        // which is what an operator means by "pay the lodge".
+        .orderBy(obligations.due_on, obligations.created_at)
+    );
   });
 
   const made = [];
@@ -826,6 +858,7 @@ export const applySettlement = async (
         settlementId,
         sourceType,
         sourceId,
+        counterpartyId,
       }
     );
   }
