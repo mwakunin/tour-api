@@ -24,6 +24,7 @@ import blogRoutes from '#routes/blog.routes.js';
 import chatRoutes from '#routes/chat.routes.js';
 import counterpartyRoutes from '#routes/counterparty.routes.js';
 import fxRateRoutes from '#routes/fxRate.routes.js';
+import supplierInvoiceRoutes from '#routes/supplierInvoice.routes.js';
 import { corsOptions } from '#config/cors.config.js';
 import usersRoutes from '#routes/users.routes.js';
 import adminTestRoutes from '#routes/admin-test.routes.js';
@@ -154,6 +155,7 @@ app.use('/api/payments', paymentRoutes);
 // counterparties. Mounted after resolveTenant like every other /api route.
 app.use('/api/counterparties', counterpartyRoutes);
 app.use('/api/fx-rates', fxRateRoutes);
+app.use('/api/supplier-invoices', supplierInvoiceRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/inquiries', inquiryRoutes);
 app.use('/api/blog', blogRoutes);

@@ -12,6 +12,7 @@ import {
   updateBookingController,
   getRevenueStatsController,
   getBookingTrendsController,
+  getBookingPnlController,
 } from '#controllers/booking.controller.js';
 import { requireAuth, requireAdmin } from '#middleware/auth.middleware.js';
 import { publicSecurityMiddleware } from '#middleware/security.middleware.js';
@@ -53,6 +54,11 @@ router.get(
 
 // Admin list all bookings
 router.get('/', requireAuth, requireAdmin, getAllBookings);
+
+// What one trip made. Registered with the other admin reads and before the
+// dynamic ':id' handlers below, which would otherwise match '/:id/pnl' only by
+// accident of ordering.
+router.get('/:id/pnl', requireAuth, requireAdmin, getBookingPnlController);
 
 // Protected routes - user authentication required
 router.post('/', requireAuth, createBookingController);

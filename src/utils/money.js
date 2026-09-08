@@ -31,7 +31,25 @@ export const decimalToCents = (value) => {
     BigInt(fraction.padEnd(3, '0').slice(0, 2)) +
     (Number(fraction.padEnd(3, '0')[2]) >= 5 ? 1n : 0n);
 
-  return Number(negative ? -cents : cents);
+  const result = Number(negative ? -cents : cents);
+
+  // The arithmetic above is exact BigInt; this is where it stops being exact.
+  // 90071992547409.93 is 9007199254740993 cents, which Number rounds to
+  // 9007199254740992 — a different amount, silently. assertAmountCents does
+  // reject it downstream, so nothing wrong is stored, but the caller gets a
+  // money-layer error about an amount they did not send rather than a
+  // straight answer about the one they did.
+  //
+  // decimalToPpm has carried this check since it was written. This is the
+  // same hazard in the older half of the same file.
+  if (!Number.isSafeInteger(result)) {
+    throw new Error(
+      `[money] ${text} is more cents than a JS number can hold exactly ` +
+        `(${negative ? '-' : ''}${cents})`
+    );
+  }
+
+  return result;
 };
 
 /** Cents back to a fixed 2-decimal string, for the columns still holding decimal. */

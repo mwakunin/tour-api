@@ -21,7 +21,11 @@ import {
   bookingCustomerEditableSchema,
   bookingPriceAdjustmentSchema,
 } from '#validations/booking.validation.js';
-import { paginationSchema } from '#validations/common.js';
+import { paginationSchema, uuidParamSchema } from '#validations/common.js';
+import {
+  bookingPnl,
+  BOOKING_NOT_FOUND as PNL_BOOKING_NOT_FOUND,
+} from '#services/bookingPnl.service.js';
 
 export const createBookingController = async (req, res, next) => {
   try {
@@ -529,6 +533,45 @@ export const getBookingTrendsController = async (req, res, next) => {
     });
   } catch (error) {
     logger.error('[Booking Controller] Get trends error:', error);
+    next(error);
+  }
+};
+
+/**
+ * GET /api/bookings/:id/pnl
+ *
+ * Revenue against cost for one trip, in the operator's own currency. Admin
+ * only: what a booking made is the operator's commercial position, not
+ * something the customer who made it should be able to read.
+ */
+export const getBookingPnlController = async (req, res, next) => {
+  try {
+    // Validated before the query: a malformed id reaches a uuid column as a
+    // Postgres cast error, which the error handler answers 500 rather than
+    // 400.
+    const { id } = uuidParamSchema.parse(req.params);
+    const pnl = await bookingPnl(id);
+
+    // What a trip made is the operator's commercial position. Helmet sets no
+    // cache policy, and without one a shared cache or a browser is free to
+    // keep an authenticated JSON response around — on a shared machine that
+    // outlives the session that was allowed to see it.
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, data: pnl });
+  } catch (error) {
+    if (error.name === 'ZodError') {
+      return res.status(400).json({
+        success: false,
+        error: 'Validation error',
+        details: error.issues,
+      });
+    }
+    if (error.message === PNL_BOOKING_NOT_FOUND) {
+      return res
+        .status(404)
+        .json({ success: false, error: PNL_BOOKING_NOT_FOUND });
+    }
+    logger.error('[Booking Controller] P&L error:', error);
     next(error);
   }
 };

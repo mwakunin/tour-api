@@ -184,7 +184,7 @@ describe('booking -> money layer bridge', () => {
 
     await asTenant(() => bookingLedger.raiseBookingReceivable(booking));
     const voided = await asTenant(() =>
-      bookingLedger.voidBookingReceivables(booking.id)
+      bookingLedger.voidBookingObligations(booking.id)
     );
 
     expect(voided).toHaveLength(1);
@@ -226,7 +226,7 @@ describe('booking -> money layer bridge', () => {
     // left to retry from. It has to reach the caller so the surrounding
     // transaction rolls back.
     await expect(
-      bookingLedger.voidBookingReceivables(booking.id)
+      bookingLedger.voidBookingObligations(booking.id)
     ).rejects.toThrow(/tenant context/);
 
     // And the receivable is untouched, not half-voided.
