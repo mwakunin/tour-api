@@ -53,25 +53,44 @@ export const kesPerUsd = async () => {
   const tenantId = currentTenantId();
   const today = new Date().toISOString().slice(0, 10);
 
-  const [rate] = await withTenantDb((tx) =>
-    tx
-      .select({ ratePpm: fx_rates.rate_ppm })
-      .from(fx_rates)
-      .where(
-        and(
-          eq(fx_rates.base_currency, 'USD'),
-          eq(fx_rates.quote_currency, 'KES'),
-          lte(fx_rates.as_of, today),
-          // The operator's own contracted rate, or the shared reference one.
-          or(eq(fx_rates.tenant_id, tenantId), isNull(fx_rates.tenant_id))
+  let rate;
+  try {
+    [rate] = await withTenantDb((tx) =>
+      tx
+        .select({ ratePpm: fx_rates.rate_ppm })
+        .from(fx_rates)
+        .where(
+          and(
+            eq(fx_rates.base_currency, 'USD'),
+            eq(fx_rates.quote_currency, 'KES'),
+            lte(fx_rates.as_of, today),
+            // The operator's own contracted rate, or the shared reference one.
+            or(eq(fx_rates.tenant_id, tenantId), isNull(fx_rates.tenant_id))
+          )
         )
-      )
-      // NULLS LAST rather than desc(tenant_id): Postgres sorts NULLs FIRST in
-      // DESC, which would let the shared rate beat the tenant's own whenever
-      // both exist for the same date. Same trap as findRate.
-      .orderBy(desc(fx_rates.as_of), sql`${fx_rates.tenant_id} DESC NULLS LAST`)
-      .limit(1)
-  );
+        // NULLS LAST rather than desc(tenant_id): Postgres sorts NULLs FIRST
+        // in DESC, which would let the shared rate beat the tenant's own
+        // whenever both exist for the same date. Same trap as findRate.
+        .orderBy(
+          desc(fx_rates.as_of),
+          sql`${fx_rates.tenant_id} DESC NULLS LAST`
+        )
+        .limit(1)
+    );
+  } catch (error) {
+    // A lookup that failed and a lookup that found nothing are the same
+    // question unanswered, and this function's whole premise is that reporting
+    // falls back where the ledger refuses. Only the no-row half did, so a
+    // transient fx_rates error took out three admin dashboards instead of
+    // producing the figure they showed the day before. The sibling that got
+    // written and the one that did not, again.
+    logger.error(
+      '[reportingFx] USD/KES lookup failed; reporting revenue at the legacy ' +
+        `default of ${LEGACY_KES_PER_USD}`,
+      { tenantId, error: error.message }
+    );
+    return LEGACY_KES_PER_USD;
+  }
 
   if (!rate) {
     logger.warn(

@@ -69,6 +69,26 @@ DO $$
 DECLARE
   offenders text;
 BEGIN
+  -- The count below is only worth reading if this role can see every row.
+  -- obligations is FORCE ROW LEVEL SECURITY, and with app.tenant_id unset
+  -- public.current_tenant_id() is NULL, so a role the policy applies to sees
+  -- nothing -- the check would pass silently and the index build would fail
+  -- with the opaque error this block exists to replace.
+  --
+  -- Migrations run on the owner connection (DATABASE_URL), which is superuser
+  -- and BYPASSRLS, so this passes today. It is asserted rather than assumed
+  -- because the day somebody provisions a plain owner for migrations, a silent
+  -- no-op is the worst of the available outcomes.
+  --
+  -- Not `SET LOCAL row_security = off`: that raises when a policy would apply
+  -- rather than bypassing it, so it cannot rescue this case.
+  IF row_security_active('obligations') THEN
+    RAISE EXCEPTION
+      'Cannot check for duplicate accruals: row-level security is active for '
+      'role %, so this query cannot see other tenants rows. Run migrations '
+      'as the owner (DATABASE_URL), not the runtime role.', current_user;
+  END IF;
+
   -- format() takes %s; RAISE below takes a bare %. They are not the same
   -- placeholder, and mixing them prints a stray 's' into the operator's face
   -- at exactly the moment they are trying to read it.

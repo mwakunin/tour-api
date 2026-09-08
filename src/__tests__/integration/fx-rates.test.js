@@ -350,6 +350,15 @@ describe('FX Rate API Integration Tests', () => {
       );
     });
 
+    it('falls back when the lookup itself fails', async () => {
+      // Outside a tenant context, so withTenantDb rejects rather than
+      // returning no rows. A failed lookup and an empty one are the same
+      // question unanswered; only the empty half used to fall back, so a
+      // transient error took out three dashboards instead of showing the
+      // figure they showed yesterday.
+      await expect(kesPerUsd()).resolves.toBe(LEGACY_KES_PER_USD);
+    });
+
     it('follows a newer shared rate', async () => {
       const [newer] = await db
         .insert(fx_rates)
