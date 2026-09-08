@@ -329,6 +329,42 @@ describe('Settlement worklist Integration Tests', () => {
       expect(payable).toBe(0);
     });
 
+    it("refuses to clear another supplier's invoice", async () => {
+      const paid = await newSupplier();
+      const other = await newSupplier();
+
+      const settlement = await strandedPayment(paid.id, 50000);
+      const theirInvoice = await newInvoice(other, '500.00');
+
+      const response = await adminAgent
+        .post(`/api/settlements/${settlement.id}/allocations`)
+        .send({ obligation_id: theirInvoice.body.data.obligation_id });
+
+      // allocate checks status, currency, direction and both balances, and
+      // none of those catch this: the ledger would balance while one
+      // supplier's payment cleared another's debt.
+      expect(response.status).toBe(422);
+      expect(response.body.error).toMatch(/different counterparties/);
+    });
+
+    it('returns the counterparty name it promises', async () => {
+      const supplier = await newSupplier();
+      const settlement = await strandedPayment(supplier.id, 50000);
+      const invoice = await newInvoice(supplier, '500.00');
+
+      const response = await adminAgent
+        .post(`/api/settlements/${settlement.id}/allocations`)
+        .send({ obligation_id: invoice.body.data.obligation_id })
+        .expect(201);
+
+      // The shape includes counterparty_name, and this query has to join for
+      // it — the list endpoint did and this one did not, so the same field was
+      // populated in one response and null in the other.
+      expect(response.body.data.settlement.counterparty_name).toBe(
+        supplier.name
+      );
+    });
+
     it('refuses an obligation in the wrong direction', async () => {
       const supplier = await newSupplier();
       const settlement = await strandedPayment(supplier.id, 50000);

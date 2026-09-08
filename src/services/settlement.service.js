@@ -31,6 +31,8 @@ const SETTLEMENT_NOT_FOUND = 'Settlement not found';
 const OBLIGATION_NOT_FOUND = 'Obligation not found';
 const NOTHING_LEFT = 'That settlement has nothing left to allocate';
 const NOTHING_OWED = 'That obligation has nothing left outstanding';
+const COUNTERPARTY_MISMATCH =
+  'That settlement and that obligation belong to different counterparties';
 
 // Both sides of a match are "amount minus what has been allocated", from
 // opposite ends of the same table.
@@ -155,6 +157,23 @@ export const matchSettlement = async (settlementId, validated) => {
 
     if (!obligation) throw new Error(OBLIGATION_NOT_FOUND);
 
+    // allocate checks status, currency, direction and both balances -- it does
+    // not check who the money belongs to, because an obligation raised from a
+    // booking has no counterparty at all and matching a customer's payment to
+    // it is the ordinary case.
+    //
+    // But where both sides name somebody and the names differ, this is a
+    // payment to one supplier clearing another supplier's invoice: the ledger
+    // would balance, the books would be wrong, and the settlement that really
+    // was for the first supplier would show as spent.
+    if (
+      settlement.counterparty_id &&
+      obligation.counterparty_id &&
+      settlement.counterparty_id !== obligation.counterparty_id
+    ) {
+      throw new Error(COUNTERPARTY_MISMATCH);
+    }
+
     const left = await money.unallocatedCentsFor(tx, settlementId);
     if (left <= 0) throw new Error(NOTHING_LEFT);
 
@@ -177,6 +196,9 @@ export const matchSettlement = async (settlementId, validated) => {
     amountCents: allocation.amount_cents,
   });
 
+  // Joined, because shape() reads counterparty_name and this query did not
+  // select it -- so every response from this endpoint reported the name as
+  // null while the list endpoint, which does join, reported it correctly.
   const [remaining] = await withTenantDb((tx) =>
     tx
       .select({
@@ -188,13 +210,18 @@ export const matchSettlement = async (settlementId, validated) => {
         external_reference: settlements.external_reference,
         notes: settlements.notes,
         counterparty_id: settlements.counterparty_id,
+        counterparty_name: counterparties.name,
         amount_cents: settlements.amount_cents,
         unallocated_cents: unallocatedExpr.mapWith(Number),
       })
       .from(settlements)
       .leftJoin(allocations, eq(allocations.settlement_id, settlements.id))
+      .leftJoin(
+        counterparties,
+        eq(counterparties.id, settlements.counterparty_id)
+      )
       .where(eq(settlements.id, settlementId))
-      .groupBy(settlements.id)
+      .groupBy(settlements.id, counterparties.name)
   );
 
   return {
@@ -211,4 +238,5 @@ export {
   OBLIGATION_NOT_FOUND,
   NOTHING_LEFT,
   NOTHING_OWED,
+  COUNTERPARTY_MISMATCH,
 };

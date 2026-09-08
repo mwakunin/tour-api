@@ -22,6 +22,9 @@ import {
   ledger_entries,
 } from '#models/money.model.js';
 import { supplierInvoices } from '#models/supplierInvoice.model.js';
+import { runWithTenant } from '#config/tenantContext.js';
+import * as money from '#services/money.service.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import {
   createAuthenticatedAgent,
   createAuthenticatedAdminAgent,
@@ -282,6 +285,72 @@ describe('Payables API Integration Tests', () => {
         .filter((l) => l.account === 'cash_bank')
         .reduce((sum, l) => sum + l.base_amount_cents, 0);
       expect(cash).toBe(-50000);
+    });
+
+    it('refuses a second payment once everything is settled', async () => {
+      const supplier = await newSupplier();
+      await newInvoice(supplier, '500.00', '2026-01-01');
+
+      await adminAgent
+        .post(`/api/counterparties/${supplier.id}/payments`)
+        .send({ amount: '500.00', method: 'bank_transfer' })
+        .expect(201);
+
+      // The obligation is still 'open' — status is lifecycle only and nothing
+      // marks it settled, by design. A guard that checked status alone would
+      // pass here and record a payment that could allocate nothing, stranding
+      // the money it was meant to prevent stranding.
+      const response = await adminAgent
+        .post(`/api/counterparties/${supplier.id}/payments`)
+        .send({ amount: '100.00', method: 'bank_transfer' });
+
+      expect(response.status).toBe(422);
+      expect(response.body.error).toMatch(/nothing outstanding/);
+    });
+
+    it('pays a dated payable before an undated one', async () => {
+      const supplier = await newSupplier();
+
+      // Raised directly, because no endpoint produces an undated payable
+      // today: createSupplierInvoice falls back to the issue date when a
+      // supplier has no terms. createObligation does allow a null due date,
+      // and the ordering has to hold if anything ever raises one.
+      await runWithTenant(SEED_TENANT_ID, () =>
+        money.createObligation({
+          direction: 'payable',
+          kind: 'full',
+          counterpartyId: supplier.id,
+          sourceType: 'supplier_invoice',
+          sourceId: '55555555-5555-4555-8555-555555555555',
+          amountCents: 30000,
+          currency: 'KES',
+          dueOn: null,
+          description: 'Undated',
+        })
+      );
+
+      await adminAgent.post('/api/supplier-invoices').send({
+        counterparty_id: supplier.id,
+        invoice_number: `INV-DATED-${Date.now()}`,
+        issued_on: '2026-02-01',
+        due_on: '2026-02-28',
+        amount: '200.00',
+      });
+
+      await adminAgent
+        .post(`/api/counterparties/${supplier.id}/payments`)
+        .send({ amount: '200.00', method: 'bank_transfer' })
+        .expect(201);
+
+      const after = await adminAgent
+        .get(`/api/counterparties/${supplier.id}/payables`)
+        .expect(200);
+
+      // Postgres sorts NULLs last in ASC, so the dated invoice is cleared
+      // first and the undated one is what remains.
+      expect(after.body.data.payables).toHaveLength(1);
+      expect(after.body.data.payables[0].due_on).toBeNull();
+      expect(after.body.data.payables[0].outstanding).toBe('300.00');
     });
 
     it('refuses a payment to somebody owed nothing', async () => {

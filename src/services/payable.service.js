@@ -30,6 +30,41 @@ const NOTHING_OWED =
 // shows up, because it is read most often when the list is longest.
 const outstandingExpr = sql`${obligations.amount_cents} - coalesce(sum(${allocations.amount_cents}), 0)`;
 
+// The one query both the list and the payment guard ask, so they cannot give
+// different answers about whether anything is owed.
+//
+// status is lifecycle only -- open, void, written_off -- and allocate never
+// changes it, by design: whether something is settled is derived from
+// allocations so it cannot drift from the money. That means a fully paid
+// obligation is still 'open', and a guard that only checks status says a
+// counterparty is owed something long after they have been paid in full.
+const outstandingPayables = (tx, counterpartyId, currency = null) => {
+  const conditions = [
+    eq(obligations.counterparty_id, counterpartyId),
+    eq(obligations.direction, 'payable'),
+    eq(obligations.status, 'open'),
+  ];
+  if (currency) conditions.push(eq(obligations.currency, currency));
+
+  return tx
+    .select({
+      id: obligations.id,
+      kind: obligations.kind,
+      source_type: obligations.source_type,
+      source_id: obligations.source_id,
+      description: obligations.description,
+      due_on: obligations.due_on,
+      currency: obligations.currency,
+      amount_cents: obligations.amount_cents,
+      outstanding_cents: outstandingExpr.mapWith(Number),
+    })
+    .from(obligations)
+    .leftJoin(allocations, eq(allocations.obligation_id, obligations.id))
+    .where(and(...conditions))
+    .groupBy(obligations.id)
+    .having(sql`${outstandingExpr} > 0`);
+};
+
 const shapeObligation = (row) => ({
   obligation_id: row.id,
   kind: row.kind,
@@ -68,30 +103,12 @@ export const listPayables = (counterpartyId) =>
   withTenantDb(async (tx) => {
     const counterparty = await requireCounterparty(tx, counterpartyId);
 
-    const rows = await tx
-      .select({
-        id: obligations.id,
-        kind: obligations.kind,
-        source_type: obligations.source_type,
-        source_id: obligations.source_id,
-        description: obligations.description,
-        due_on: obligations.due_on,
-        currency: obligations.currency,
-        amount_cents: obligations.amount_cents,
-        outstanding_cents: outstandingExpr.mapWith(Number),
-      })
-      .from(obligations)
-      .leftJoin(allocations, eq(allocations.obligation_id, obligations.id))
-      .where(
-        and(
-          eq(obligations.counterparty_id, counterpartyId),
-          eq(obligations.direction, 'payable'),
-          eq(obligations.status, 'open')
-        )
-      )
-      .groupBy(obligations.id)
-      .having(sql`${outstandingExpr} > 0`)
-      .orderBy(obligations.due_on, obligations.created_at);
+    // NULLs last is Postgres's default for ASC, which is what is wanted here:
+    // a dated invoice is paid before an undated one.
+    const rows = await outstandingPayables(tx, counterpartyId).orderBy(
+      obligations.due_on,
+      obligations.created_at
+    );
 
     // Totalled per currency rather than summed into one number. A lodge
     // invoicing in USD and a guide paid in KES are two different debts, and
@@ -138,19 +155,19 @@ export const payCounterparty = async (counterpartyId, validated) => {
     // nothing in that currency is almost always a mistyped counterparty or a
     // mistyped currency, and recording it would leave money sitting unmatched
     // for somebody to chase later.
-    const [owed] = await tx
-      .select({ total: sql`count(*)`.mapWith(Number) })
-      .from(obligations)
-      .where(
-        and(
-          eq(obligations.counterparty_id, counterpartyId),
-          eq(obligations.direction, 'payable'),
-          eq(obligations.status, 'open'),
-          eq(obligations.currency, settlementCurrency)
-        )
-      );
+    //
+    // Through the same query the list uses. Counting open obligations instead
+    // would pass for a counterparty whose invoices are all fully paid, because
+    // nothing marks an obligation settled -- and this endpoint would then
+    // record a payment applySettlement cannot allocate, creating exactly the
+    // stranded money the check exists to prevent.
+    const owed = await outstandingPayables(
+      tx,
+      counterpartyId,
+      settlementCurrency
+    );
 
-    if (!owed?.total) throw new Error(NOTHING_OWED);
+    if (!owed.length) throw new Error(NOTHING_OWED);
 
     const settlement = await money.recordSettlement({
       direction: 'out',

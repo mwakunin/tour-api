@@ -6,6 +6,7 @@ import {
   OBLIGATION_NOT_FOUND,
   NOTHING_LEFT,
   NOTHING_OWED,
+  COUNTERPARTY_MISMATCH,
 } from '#services/settlement.service.js';
 import {
   validateUnmatchedQuery,
@@ -31,6 +32,8 @@ const STATUS = {
   // somebody else cleared it from the same worklist a moment earlier.
   [NOTHING_LEFT]: 409,
   [NOTHING_OWED]: 409,
+  // Both rows exist and both are usable; pairing these two is the mistake.
+  [COUNTERPARTY_MISMATCH]: 422,
 };
 
 export const listUnmatchedController = async (req, res, next) => {
