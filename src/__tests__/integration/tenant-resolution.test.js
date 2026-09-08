@@ -21,6 +21,10 @@ import {
 import {
   _slugForHost,
   _clearTenantCache,
+  _tenantCacheSize,
+  _tenantCacheMax,
+  _rememberTenant,
+  UNRESOLVABLE,
 } from '#middleware/tenant.middleware.js';
 
 const SUFFIX = 'tourops.test';
@@ -65,9 +69,44 @@ describe('tenant resolution', () => {
     it('refuses a deeper host rather than defaulting it', () => {
       // Under our routing domain but naming no single operator. Returning null
       // would serve it the seeded tenant, which is the confusion the suffix
-      // exists to prevent, so it returns an unmatchable slug and the caller
-      // 404s.
-      expect(_slugForHost(`a.b.${SUFFIX}`, SUFFIX)).toBe('a.b');
+      // exists to prevent.
+      //
+      // UNRESOLVABLE rather than the string 'a.b': that used to be returned as
+      // a slug on the reasoning that no row could match it, which was wrong.
+      // tenants.slug is varchar(63) and, until the CHECK constraint below,
+      // carried no format rule — a tenant registered as `a.b` would have been
+      // found by a lookup and served under this host.
+      expect(_slugForHost(`a.b.${SUFFIX}`, SUFFIX)).toBe(UNRESOLVABLE);
+      expect(_slugForHost(`a.b.c.${SUFFIX}`, SUFFIX)).toBe(UNRESOLVABLE);
+    });
+  });
+
+  describe('the hostname cache', () => {
+    // With a suffix configured the cache key is chosen by the caller, so an
+    // unbounded Map is a way to grow this process's memory from the outside.
+    beforeEach(() => _clearTenantCache());
+    afterAll(() => _clearTenantCache());
+
+    it('stays bounded however many distinct hostnames arrive', () => {
+      const max = _tenantCacheMax();
+      for (let i = 0; i < max + 500; i += 1) {
+        _rememberTenant(`scan-${i}`, null);
+      }
+
+      expect(_tenantCacheSize()).toBe(max);
+    });
+
+    it('evicts the oldest write, not the newest', () => {
+      const max = _tenantCacheMax();
+      _rememberTenant('first-in', { id: 'x', status: 'active' });
+      for (let i = 0; i < max; i += 1) {
+        _rememberTenant(`scan-${i}`, null);
+      }
+
+      // A scan does flush real operators out — that costs them one query to
+      // re-read. The alternative to evicting something is evicting nothing.
+      expect(_tenantCacheSize()).toBe(max);
+      expect(_tenantCacheMax()).toBeGreaterThan(0);
     });
   });
 
@@ -176,6 +215,36 @@ describe('tenant resolution', () => {
         .expect(404);
 
       expect(response.body.error).toBe('Unknown tenant');
+    });
+
+    it('404s a multi-label host without looking it up', async () => {
+      const response = await adminAgent
+        .get('/api/counterparties')
+        .set('Host', `a.b.${SUFFIX}`)
+        .expect(404);
+
+      expect(response.body.error).toBe('Unknown tenant');
+      // Refused before the database is reached, so nothing was cached. That
+      // is the point: the lookup is what a `foo.bar` slug would have matched.
+      expect(_tenantCacheSize()).toBe(0);
+    });
+
+    it('refuses to store a slug that is not one DNS label', async () => {
+      // The other door onto the same problem. The middleware never asks about
+      // a dotted host now, and this makes sure a dotted slug cannot exist to
+      // be asked about — the column exists for subdomain routing, so its
+      // values have to be things a subdomain can be.
+      const failure = await db
+        .insert(tenants)
+        .values({
+          name: 'Dotted Operator',
+          slug: 'foo.bar',
+          booking_ref_prefix: 'DT',
+        })
+        .catch((error) => error);
+
+      // 23514 is check_violation.
+      expect(failure.cause?.code).toBe('23514');
     });
 
     it('404s a suspended operator without confirming it exists', async () => {

@@ -102,6 +102,17 @@ export const tenants = pgTable(
     slugIdx: index('tenants_slug_idx').on(table.slug),
     statusIdx: index('tenants_status_idx').on(table.status),
 
+    // The column exists for subdomain routing, so its values have to be
+    // things a subdomain can be: one DNS label, lowercase, no leading or
+    // trailing hyphen. Without this, varchar(63) NOT NULL UNIQUE happily
+    // accepts `foo.bar`, and a host foo.bar.<suffix> would resolve to it —
+    // the middleware refuses that host before it queries, and this is why it
+    // cannot come back through another door.
+    slugIsDnsLabelCk: check(
+      'tenants_slug_dns_label',
+      sql`${table.slug} ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'`
+    ),
+
     // No endpoint sets the deposit policy, so these constraints are not a
     // second opinion about what validation already checked — they are the only
     // check there is, and the operator writing the UPDATE by hand is exactly

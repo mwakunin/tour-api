@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ADD CONSTRAINT "tenants_slug_dns_label" CHECK ("tenants"."slug" ~ '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$');
