@@ -432,12 +432,24 @@ const options = {
               format: 'date-time',
               example: '2025-06-20T00:00:00Z',
             },
+            price_per_person_cents: {
+              type: 'integer',
+              description:
+                'The stored amount. Integer cents, and the only writeable one.',
+              example: 80000,
+            },
+            total_price_cents: {
+              type: 'integer',
+              example: 320000,
+            },
             price_per_person: {
               type: 'string',
+              description: 'Derived from price_per_person_cents. Read-only.',
               example: '800.00',
             },
             total_price: {
               type: 'string',
+              description: 'Derived from total_price_cents. Read-only.',
               example: '3200.00',
             },
             currency: {
@@ -517,8 +529,15 @@ const options = {
               type: 'string',
               format: 'uuid',
             },
+            amount_cents: {
+              type: 'integer',
+              description:
+                'The stored amount. Integer cents, and the only writeable one.',
+              example: 320000,
+            },
             amount: {
               type: 'string',
+              description: 'Derived from amount_cents. Read-only.',
               example: '3200.00',
             },
             currency: {

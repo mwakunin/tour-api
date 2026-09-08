@@ -12,6 +12,7 @@ import logger from '#config/logger.js';
 import { emailService } from './email.service.js';
 import { recordBookingSettlement } from './bookingLedger.service.js';
 import { invalidateBooking } from '#utils/cacheInvalidation.js';
+import { decimalToCents } from '#utils/money.js';
 
 // Paystack is a third party that can hang. Without a bound, a slow
 // response holds this request and its connection open indefinitely.
@@ -53,7 +54,7 @@ export const initializePaystackPayment = async ({
         .values({
           tenant_id: currentTenantId(),
           booking_id: bookingId,
-          amount: amount.toString(),
+          amount_cents: decimalToCents(amount),
           currency,
           payment_method: 'paystack',
           paystack_reference: reference,
@@ -197,7 +198,9 @@ export const verifyPaystackPayment = async (reference) => {
     // Check if payment was successful
     if (data.status === 'success') {
       // ✅ Verify the paid amount matches what's expected, before trusting it
-      const expectedMinor = Math.round(parseFloat(payment.amount) * 100);
+      // Paystack's minor unit is the cent, and so is ours now — no float
+      // multiplication between the two.
+      const expectedMinor = payment.amount_cents;
       if (data.amount !== expectedMinor || data.currency !== payment.currency) {
         logger.error('Paystack amount mismatch:', {
           reference,

@@ -27,6 +27,7 @@ import {
   resolvePricingPeriod,
   resolveTierForGroupSize,
 } from '#validations/tour.validation.js';
+import { decimalToCents } from '#utils/money.js';
 
 /**
  * A rejection the customer can act on (bad dates, mismatched package) rather
@@ -164,8 +165,11 @@ export const createBooking = async (data) => {
             status: 'pending',
             payment_status: 'pending',
             booking_reference: bookingReference,
-            price_per_person: pricePerPerson.toFixed(2),
-            total_price: totalPrice.toFixed(2),
+            // toFixed(2) first, then to cents: that is the value the
+            // decimal column used to store, so the representation changes and
+            // the stored amount does not.
+            price_per_person_cents: decimalToCents(pricePerPerson.toFixed(2)),
+            total_price_cents: decimalToCents(totalPrice.toFixed(2)),
             currency,
             updated_at: new Date(),
           })

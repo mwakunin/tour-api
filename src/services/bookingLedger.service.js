@@ -21,7 +21,6 @@ import {
   inTenantTransaction,
 } from '#config/tenantContext.js';
 import { obligations, counterparties, tenants } from '#models/schema.js';
-import { decimalToCents } from '#utils/money.js';
 import logger from '#config/logger.js';
 import * as money from './money.service.js';
 
@@ -81,7 +80,7 @@ export const raiseAgentCommission = async (booking) => {
     return null;
   }
 
-  const totalCents = decimalToCents(booking.total_price);
+  const totalCents = booking.total_price_cents;
   if (!totalCents || totalCents <= 0) return null;
 
   const amountCents = centsAtBps(totalCents, agent.commission_rate_bps);
@@ -165,13 +164,17 @@ const isoDaysBefore = (iso, days) => {
  */
 export const raiseBookingReceivable = async (booking) => {
   try {
-    const amountCents = decimalToCents(booking.total_price);
+    // Read straight off the column now that bookings store cents. This used
+    // to be decimalToCents(booking.total_price) — a conversion between two
+    // representations of the same money, which is exactly the class of step
+    // that loses a cent.
+    const amountCents = booking.total_price_cents;
     if (!amountCents || amountCents <= 0) {
       logger.warn(
         '[bookingLedger] skipping receivable for non-positive total',
         {
           bookingId: booking.id,
-          total: booking.total_price,
+          totalCents: booking.total_price_cents,
         }
       );
       return [];
@@ -272,7 +275,7 @@ export const raiseBookingReceivable = async (booking) => {
  */
 export const recordBookingSettlement = async ({ payment, booking }) => {
   try {
-    const amountCents = decimalToCents(payment.amount);
+    const amountCents = payment.amount_cents;
     if (!amountCents || amountCents <= 0) {
       logger.warn(
         '[bookingLedger] skipping settlement for non-positive amount',

@@ -6,7 +6,7 @@ import {
   afterAll,
   afterEach,
 } from '@jest/globals';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { db } from '#config/database.js';
 import { appPool } from '#config/appDatabase.js';
@@ -24,6 +24,7 @@ import {
 } from '#models/schema.js';
 import * as bookingLedger from '#services/bookingLedger.service.js';
 import * as money from '#services/money.service.js';
+import { decimalToCents } from '#utils/money.js';
 
 const asTenant = (fn) => runWithTenant(SEED_TENANT_ID, fn);
 
@@ -46,8 +47,8 @@ const seedBooking = async (totalPrice = '4200.00') => {
       group_size: 2,
       start_date: new Date('2026-11-10'),
       end_date: new Date('2026-11-17'),
-      price_per_person: totalPrice,
-      total_price: totalPrice,
+      price_per_person_cents: decimalToCents(totalPrice),
+      total_price_cents: decimalToCents(totalPrice),
       currency: 'KES',
       customer_name: 'Jane Traveller',
       customer_email: 'jane@example.com',
@@ -62,7 +63,7 @@ const seedPayment = async (bookingId, amount, overrides = {}) => {
     .values({
       tenant_id: SEED_TENANT_ID,
       booking_id: bookingId,
-      amount,
+      amount_cents: decimalToCents(amount),
       currency: 'KES',
       payment_method: 'mpesa',
       status: 'completed',
@@ -172,9 +173,12 @@ describe('booking -> money layer bridge', () => {
     created.push(booking.id);
     const payment = await seedPayment(booking.id, '100.00');
 
+    // Corrupt the cents, not the decimal: `amount` is a generated column now
+    // and the ledger reads amount_cents, so a bad string there is what a
+    // failure actually looks like from here.
     const result = await asTenant(() =>
       bookingLedger.recordBookingSettlement({
-        payment: { ...payment, amount: 'not-a-number' },
+        payment: { ...payment, amount_cents: 'not-a-number' },
       })
     );
     expect(result).toBeNull();
@@ -200,6 +204,37 @@ describe('booking -> money layer bridge', () => {
 
     expect(voided).toHaveLength(1);
     expect(voided[0].status).toBe('void');
+  });
+
+  describe('money is stored as integer cents', () => {
+    it('keeps the cents exact and still reports the decimal', async () => {
+      const booking = await seedBooking('1000.15');
+      created.push(booking.id);
+
+      // The cents are what is written; the decimal is generated from them, so
+      // the API contract the frontend reads is unchanged.
+      expect(booking.total_price_cents).toBe(100015);
+      expect(booking.total_price).toBe('1000.15');
+    });
+
+    it('refuses a write to the derived decimal column', async () => {
+      const booking = await seedBooking('1000.00');
+      created.push(booking.id);
+
+      // The guarantee the whole change rests on. Two columns kept in step by
+      // convention drift; this one cannot be written at all, so there is no
+      // convention left to break.
+      const failure = await db
+        .execute(
+          sql`UPDATE bookings SET total_price = 1 WHERE id = ${booking.id}`
+        )
+        .catch((error) => error);
+
+      // 428C9 is ERRCODE_GENERATED_ALWAYS. Asserted on the code rather than
+      // the text, which is translated. Drizzle wraps the driver error, so the
+      // real one is on .cause — the same place the 23505 checks read.
+      expect(failure.cause?.code).toBe('428C9');
+    });
   });
 
   describe('with a deposit policy configured', () => {

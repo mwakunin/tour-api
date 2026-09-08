@@ -69,8 +69,8 @@ const seedBooking = async (overrides = {}) => {
       group_size: 2,
       start_date: new Date('2026-11-10'),
       end_date: new Date('2026-11-17'),
-      price_per_person: '2100.00',
-      total_price: '4200.00',
+      price_per_person_cents: 210000,
+      total_price_cents: 420000,
       currency: 'KES',
       customer_name: 'Jane Traveller',
       customer_email: 'jane@example.com',
@@ -173,7 +173,7 @@ describe('booking money', () => {
       // rounds to 3330 — pick a total where the two differ.
       const booking = await seedBooking({
         agent_id: agent.id,
-        total_price: '1000.15',
+        total_price_cents: 100015,
       });
 
       const commission = await asTenant(() =>

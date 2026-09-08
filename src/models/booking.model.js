@@ -4,13 +4,14 @@ import {
   text,
   varchar,
   integer,
+  bigint,
   decimal,
   timestamp,
   index,
   unique,
   foreignKey,
 } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { tours } from './tour.model.js';
 import { user } from './user.model.js';
 import {
@@ -48,14 +49,38 @@ export const bookings = pgTable(
     start_date: timestamp('start_date', { withTimezone: true }).notNull(),
     end_date: timestamp('end_date', { withTimezone: true }).notNull(),
 
-    // Price per person at time of booking
+    // MONEY IS INTEGER CENTS. These are the columns that are written, and the
+    // only ones that are true — a price in decimal(10,2) comes back from
+    // Drizzle as a string, so every arithmetic site had to parseFloat it
+    // first, and a booking total is not a thing to hand to binary floating
+    // point. bigint because that is what the money layer stores (see
+    // obligations.amount_cents), so a booking crossing into the ledger is now
+    // a copy rather than a conversion.
+    price_per_person_cents: bigint('price_per_person_cents', {
+      mode: 'number',
+    }).notNull(),
+    total_price_cents: bigint('total_price_cents', {
+      mode: 'number',
+    }).notNull(),
+
+    // DERIVED, AND NOT WRITEABLE. Kept so that every reader — the invoice
+    // PDF, the confirmation emails, the revenue SQL in booking.service — goes
+    // on working unchanged, and so the API keeps emitting "4200.00" rather
+    // than breaking the frontend's contract.
+    //
+    // GENERATED ALWAYS rather than a second column kept in step: the pair
+    // that drifts is always the one nobody remembers to update, and Postgres
+    // refusing the write is a better reminder than a code review. An INSERT
+    // or UPDATE naming these now errors — write the _cents column instead.
     price_per_person: decimal('price_per_person', {
       precision: 10,
       scale: 2,
-    }).notNull(),
-
-    // Pricing snapshot (at time of booking)
-    total_price: decimal('total_price', { precision: 10, scale: 2 }).notNull(),
+    })
+      .notNull()
+      .generatedAlwaysAs(sql`(price_per_person_cents::numeric / 100)`),
+    total_price: decimal('total_price', { precision: 10, scale: 2 })
+      .notNull()
+      .generatedAlwaysAs(sql`(total_price_cents::numeric / 100)`),
     currency: currencyEnum('currency').notNull(),
 
     // Customer info
