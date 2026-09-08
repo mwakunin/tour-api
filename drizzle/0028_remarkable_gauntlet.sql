@@ -53,6 +53,47 @@ CREATE POLICY "ledger_outbox_tenant_isolation" ON "ledger_outbox"
 --
 -- The check in bookingLedger turns this into a clean skip. The index is what
 -- makes it true when two drains run at once.
+-- Refuse legibly rather than failing on the index build.
+--
+-- Nothing before this migration stopped two concurrent calls from raising the
+-- same accrual twice: the raisers read-then-inserted with no constraint behind
+-- them. Neither dev nor test has such a row, but neither is production, and
+-- CREATE UNIQUE INDEX would report one duplicated key value and nothing about
+-- which bookings to look at or what to do.
+--
+-- Deliberately NOT reconciling them automatically. Two open accruals against
+-- one booking are two claims on real money, and which of them is right -- or
+-- whether both are, because somebody genuinely rebooked -- is not a decision a
+-- migration gets to take silently. Voiding the wrong one erases revenue.
+DO $$
+DECLARE
+  offenders text;
+BEGIN
+  -- format() takes %s; RAISE below takes a bare %. They are not the same
+  -- placeholder, and mixing them prints a stray 's' into the operator's face
+  -- at exactly the moment they are trying to read it.
+  SELECT E'\n  ' || string_agg(
+           format('booking %s (%s/%s): %s rows', source_id, direction, kind, n),
+           E'\n  '
+         )
+    INTO offenders
+    FROM (
+      SELECT source_id, direction, kind, count(*) AS n
+        FROM obligations
+       WHERE status = 'open' AND source_type = 'booking'
+       GROUP BY tenant_id, source_id, direction, kind
+      HAVING count(*) > 1
+    ) dupes;
+
+  IF offenders IS NOT NULL THEN
+    RAISE EXCEPTION
+      'Duplicate open booking accruals exist, so the uniqueness this migration '
+      'adds cannot be applied. Void the obligations that should not stand, '
+      'then re-run. Affected:%', offenders;
+  END IF;
+END
+$$;--> statement-breakpoint
+
 CREATE UNIQUE INDEX "obligations_booking_accrual_unique"
   ON "obligations" ("tenant_id", "source_type", "source_id", "direction", "kind")
   WHERE "status" = 'open' AND "source_type" = 'booking';

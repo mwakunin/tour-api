@@ -533,40 +533,69 @@ export const drainOutbox = async ({ limit = 50 } = {}) => {
  * was built to replace.
  */
 const retryEntry = async (entry) => {
+  // Retried INSIDE a transaction, and that is the whole mechanism.
+  //
+  // The three writers above swallow a failure outside a transaction and
+  // rethrow inside one -- `if (inTenantTransaction()) throw error` -- because
+  // outside there is a customer to carry on serving and inside there is
+  // nothing left to carry on with. Replaying from here wants the second
+  // behaviour: a retry that failed has to be told apart from one that found
+  // nothing to do, and outside a transaction both arrive as null.
+  //
+  // They did arrive as both, and this function resolved the entry either way.
+  // A failed replay was marked done and the accrual was lost for good, which
+  // is the exact failure the outbox exists to prevent -- rebuilt inside the
+  // thing meant to fix it. It also meant the receivable path counted one
+  // failure twice, once in recordFailure and once in noteAttempt.
+  //
+  // So: a throw is a failure, and a normal return is success or a genuine
+  // no-op. Nothing else needs to be inferred.
   if (entry.operation === 'booking_settlement') {
-    const [payment] = await withTenantDb((tx) =>
-      tx.select().from(payments).where(eq(payments.id, entry.subject_id))
-    );
-    if (!payment) return 'payment no longer exists';
+    try {
+      return await withTenantDb(async (tx) => {
+        const [payment] = await tx
+          .select()
+          .from(payments)
+          .where(eq(payments.id, entry.subject_id));
+        if (!payment) return 'payment no longer exists';
 
-    const [booking] = await withTenantDb((tx) =>
-      tx.select().from(bookings).where(eq(bookings.id, payment.booking_id))
-    );
+        const [booking] = await tx
+          .select()
+          .from(bookings)
+          .where(eq(bookings.id, payment.booking_id));
 
-    const settlement = await recordBookingSettlement({ payment, booking });
-    // A null here is the 23505 branch: another path recorded this settlement
-    // first, which is the guard working rather than a failure to retry.
-    return settlement
-      ? `settled ${settlement.id}`
-      : 'already settled elsewhere';
+        const settlement = await recordBookingSettlement({ payment, booking });
+        return settlement ? `settled ${settlement.id}` : 'nothing to settle';
+      });
+    } catch (error) {
+      // 23505 on the settlement index means another path recorded this
+      // payment first. Outside a transaction recordBookingSettlement treats
+      // that as the guard working; inside one it rethrows before it gets the
+      // chance, so the same judgement is made here.
+      if (error.cause?.code === '23505') return 'already settled elsewhere';
+      throw error;
+    }
   }
 
-  const [booking] = await withTenantDb((tx) =>
-    tx.select().from(bookings).where(eq(bookings.id, entry.subject_id))
-  );
-  if (!booking) return 'booking no longer exists';
+  return withTenantDb(async (tx) => {
+    const [booking] = await tx
+      .select()
+      .from(bookings)
+      .where(eq(bookings.id, entry.subject_id));
+    if (!booking) return 'booking no longer exists';
 
-  if (entry.operation === 'agent_commission') {
-    const commission = await raiseAgentCommission(booking);
-    return commission ? `commission ${commission.id}` : 'no commission due';
-  }
+    if (entry.operation === 'agent_commission') {
+      const commission = await raiseAgentCommission(booking);
+      // Null here is a real no-op: no agent, no rate configured, or a rate
+      // that rounds to nothing. A failure threw.
+      return commission ? `commission ${commission.id}` : 'no commission due';
+    }
 
-  const raised = await raiseBookingReceivable(booking);
-  if (raised.length === 0) {
-    // The raiser filed a fresh failure of its own rather than throwing, or
-    // the total is non-positive. Either way this entry has not been dealt
-    // with, so it must not be resolved.
-    throw new Error('receivable still could not be raised');
-  }
-  return `raised ${raised.map((row) => row.id).join(', ')}`;
+    const raised = await raiseBookingReceivable(booking);
+    // Empty here is a booking with a non-positive total, which has nothing to
+    // accrue and will never have. Resolving it beats retrying it forever.
+    return raised.length > 0
+      ? `raised ${raised.map((row) => row.id).join(', ')}`
+      : 'nothing to accrue';
+  });
 };

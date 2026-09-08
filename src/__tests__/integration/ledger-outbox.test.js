@@ -19,6 +19,7 @@ import {
   obligations,
   ledger_entries,
   ledger_outbox,
+  fx_rates,
 } from '#models/schema.js';
 import * as bookingLedger from '#services/bookingLedger.service.js';
 import * as outbox from '#services/ledgerOutbox.service.js';
@@ -191,6 +192,109 @@ describe('the ledger outbox', () => {
           error: new Error('original'),
         })
       ).resolves.toBeNull();
+    });
+  });
+
+  describe('a retry that fails again', () => {
+    // The distinction this whole drain turns on. A replay that failed and a
+    // replay that found nothing to do both used to come back as null or [],
+    // and the entry was resolved either way — so a failed accrual was marked
+    // done and lost, which is the failure the outbox exists to prevent,
+    // rebuilt inside the thing meant to fix it.
+    it('stays pending, and counts the attempt exactly once', async () => {
+      // A USD booking against a KES-based tenant with no rate loaded.
+      // toBaseCents refuses rather than inventing one, which is the most
+      // ordinary way for an accrual to fail for real.
+      await db
+        .delete(fx_rates)
+        .where(eq(fx_rates.quote_currency, 'KES'))
+        .catch(() => {});
+
+      const [booking] = await db
+        .insert(bookings)
+        .values({
+          tenant_id: SEED_TENANT_ID,
+          booking_reference: `OBF-${Date.now().toString(36)}`,
+          tour_id: tourId,
+          group_size: 1,
+          start_date: new Date('2026-11-10'),
+          end_date: new Date('2026-11-17'),
+          price_per_person_cents: 50000,
+          total_price_cents: 50000,
+          currency: 'USD',
+          customer_name: 'Unconvertible Traveller',
+          customer_email: 'nofx@example.com',
+        })
+        .returning();
+      created.push(booking.id);
+
+      const filed = await asTenant(() =>
+        outbox.recordFailure({
+          operation: 'booking_receivable',
+          subjectId: booking.id,
+          error: new Error('no USD->KES rate'),
+        })
+      );
+      expect(filed.attempts).toBe(1);
+
+      const result = await asTenant(() => bookingLedger.drainOutbox());
+      expect(result.failed).toBeGreaterThanOrEqual(1);
+
+      const [entry] = await asTenant(() =>
+        withTenantDb((tx) =>
+          tx
+            .select()
+            .from(ledger_outbox)
+            .where(eq(ledger_outbox.subject_id, booking.id))
+        )
+      );
+
+      // Still outstanding. Resolving here loses the accrual permanently.
+      expect(entry.resolved_at).toBeNull();
+
+      // 2, not 3. The receivable path recorded its own failure AND the drain
+      // noted the attempt, so one failure was counted twice. Inside a
+      // transaction the writer rethrows instead of filing, so only the drain
+      // counts it.
+      expect(entry.attempts).toBe(2);
+
+      // And nothing was accrued.
+      const raised = await asTenant(() =>
+        withTenantDb((tx) =>
+          tx
+            .select()
+            .from(obligations)
+            .where(eq(obligations.source_id, booking.id))
+        )
+      );
+      expect(raised).toHaveLength(0);
+    });
+
+    it('resolves a booking that has nothing to accrue', async () => {
+      // Zero total. Not a failure — it will never accrue, so retrying it on
+      // every drain forever is the entry nobody can action.
+      const booking = await seedBooking(0);
+
+      await asTenant(() =>
+        outbox.recordFailure({
+          operation: 'booking_receivable',
+          subjectId: booking.id,
+          error: new Error('transient'),
+        })
+      );
+
+      await asTenant(() => bookingLedger.drainOutbox());
+
+      const [entry] = await asTenant(() =>
+        withTenantDb((tx) =>
+          tx
+            .select()
+            .from(ledger_outbox)
+            .where(eq(ledger_outbox.subject_id, booking.id))
+        )
+      );
+      expect(entry.resolved_at).not.toBeNull();
+      expect(entry.resolution).toBe('nothing to accrue');
     });
   });
 
