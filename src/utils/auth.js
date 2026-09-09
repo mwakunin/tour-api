@@ -64,11 +64,38 @@ if (!process.env.TRUSTED_ORIGINS && process.env.FRONTEND_URL?.includes(',')) {
 // Safari already blocks; a Domain attribute cannot span them.
 const cookieDomain = process.env.COOKIE_DOMAIN?.trim() || null;
 
-if (cookieDomain && !cookieDomain.startsWith('.')) {
-  logger.warn(
-    `[auth] COOKIE_DOMAIN is "${cookieDomain}"; a leading dot (".${cookieDomain}") ` +
-      'is what scopes the cookie to every subdomain rather than one host.'
-  );
+// REFUSED, NOT WARNED ABOUT.
+//
+// A Domain cookie attribute is a bare domain -- ".example.com". Give
+// better-auth anything else and it sets a cookie the browser silently
+// discards, so every sign-in appears to work and no session ever comes back.
+// The first version of this only warned, and a COOKIE_DOMAIN of
+// "http://localhost:3001" -- a URL, which is what somebody reading "the
+// frontend's origin" would reasonably put -- broke every authenticated
+// request in the whole suite while printing one line nobody was reading.
+//
+// Locking every user out is not a thing to be tentative about, so a
+// malformed value stops the process here instead.
+if (cookieDomain) {
+  const looksLikeDomain =
+    /^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
+
+  if (!looksLikeDomain.test(cookieDomain)) {
+    throw new Error(
+      `[auth] COOKIE_DOMAIN must be a bare domain such as ".example.com". ` +
+        `Got "${cookieDomain}". No scheme, no port, no path — it is a cookie ` +
+        `Domain attribute, not a URL, and an invalid one makes the browser ` +
+        `discard every session cookie.`
+    );
+  }
+
+  if (!cookieDomain.startsWith('.')) {
+    logger.warn(
+      `[auth] COOKIE_DOMAIN is "${cookieDomain}"; a leading dot ` +
+        `(".${cookieDomain}") is what scopes the cookie to every subdomain ` +
+        'rather than one host.'
+    );
+  }
 }
 
 export const auth = betterAuth({

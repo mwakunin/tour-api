@@ -26,6 +26,7 @@ import counterpartyRoutes from '#routes/counterparty.routes.js';
 import fxRateRoutes from '#routes/fxRate.routes.js';
 import supplierInvoiceRoutes from '#routes/supplierInvoice.routes.js';
 import settlementRoutes from '#routes/settlement.routes.js';
+import obligationRoutes from '#routes/obligation.routes.js';
 import ledgerOutboxRoutes from '#routes/ledgerOutbox.routes.js';
 import { corsOptions } from '#config/cors.config.js';
 import usersRoutes from '#routes/users.routes.js';
@@ -172,6 +173,8 @@ app.use('/api/counterparties', counterpartyRoutes);
 app.use('/api/fx-rates', fxRateRoutes);
 app.use('/api/supplier-invoices', supplierInvoiceRoutes);
 app.use('/api/settlements', settlementRoutes);
+// Read-only. What the unmatched worklist offers as candidates to match against.
+app.use('/api/obligations', obligationRoutes);
 // Accruals that failed to reach the books, and the retry for them.
 app.use('/api/ledger-outbox', ledgerOutboxRoutes);
 app.use('/api/contact', contactRoutes);
