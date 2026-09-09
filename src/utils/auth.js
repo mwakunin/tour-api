@@ -64,11 +64,60 @@ if (!process.env.TRUSTED_ORIGINS && process.env.FRONTEND_URL?.includes(',')) {
 // Safari already blocks; a Domain attribute cannot span them.
 const cookieDomain = process.env.COOKIE_DOMAIN?.trim() || null;
 
-if (cookieDomain && !cookieDomain.startsWith('.')) {
-  logger.warn(
-    `[auth] COOKIE_DOMAIN is "${cookieDomain}"; a leading dot (".${cookieDomain}") ` +
-      'is what scopes the cookie to every subdomain rather than one host.'
-  );
+// REFUSED, NOT WARNED ABOUT.
+//
+// A Domain cookie attribute is a bare domain -- ".example.com". Give
+// better-auth anything else and it sets a cookie the browser silently
+// discards, so every sign-in appears to work and no session ever comes back.
+// The first version of this only warned, and a COOKIE_DOMAIN of
+// "http://localhost:3001" -- a URL, which is what somebody reading "the
+// frontend's origin" would reasonably put -- broke every authenticated
+// request in the whole suite while printing one line nobody was reading.
+//
+// Locking every user out is not a thing to be tentative about, so a
+// malformed value stops the process here instead.
+if (cookieDomain) {
+  const looksLikeDomain =
+    /^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
+
+  if (!looksLikeDomain.test(cookieDomain)) {
+    throw new Error(
+      `[auth] COOKIE_DOMAIN must be a bare domain such as ".example.com". ` +
+        `Got "${cookieDomain}". No scheme, no port, no path — it is a cookie ` +
+        `Domain attribute, not a URL, and an invalid one makes the browser ` +
+        `discard every session cookie.`
+    );
+  }
+
+  // A single label is never a domain somebody owns. "com" and "net" are
+  // public suffixes: browsers refuse a Domain attribute set to one, discard
+  // the cookie, and produce the same silent auth outage as the URL above.
+  // localhost is the exception, and a real one — it is what a local
+  // deployment sets.
+  const labels = cookieDomain.replace(/^\./, '').split('.');
+  if (labels.length < 2 && cookieDomain.replace(/^\./, '') !== 'localhost') {
+    throw new Error(
+      `[auth] COOKIE_DOMAIN "${cookieDomain}" is a single label. A cookie ` +
+        'Domain must be a domain you control, such as ".example.com" — a ' +
+        'public suffix like "com" is refused by every browser and the ' +
+        'session cookie is silently discarded.'
+    );
+  }
+
+  // WHAT THIS STILL DOES NOT CATCH, and deliberately. A multi-label public
+  // suffix — "co.uk", "github.io" — is equally invalid as a cookie Domain and
+  // passes here, because telling them apart from a real domain needs the
+  // Public Suffix List: a dependency carrying thousands of entries that goes
+  // stale between releases, to check one value an operator sets once at
+  // deploy. The single-label case is worth catching because it is a plausible
+  // slip; ".co.uk" would mean the operator owns no domain at all.
+  if (!cookieDomain.startsWith('.')) {
+    logger.warn(
+      `[auth] COOKIE_DOMAIN is "${cookieDomain}"; a leading dot ` +
+        `(".${cookieDomain}") is what scopes the cookie to every subdomain ` +
+        'rather than one host.'
+    );
+  }
 }
 
 export const auth = betterAuth({
