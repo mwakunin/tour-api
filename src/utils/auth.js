@@ -47,6 +47,30 @@ if (!process.env.TRUSTED_ORIGINS && process.env.FRONTEND_URL?.includes(',')) {
   );
 }
 
+// The registrable domain the session cookie is scoped to, e.g. ".tourops.app".
+//
+// Set it when the frontend and this API are separate hosts under one domain —
+// app.tourops.app calling api.tourops.app. Without it better-auth sets a
+// host-only cookie, which the browser sends only back to the API host, so the
+// frontend's own middleware cannot read it and every protected route looks
+// signed out to the server rendering it.
+//
+// UNSET IS THE DEFAULT AND CHANGES NOTHING. Same-origin deployments — anything
+// proxying /api through the frontend — want a host-only cookie and should
+// leave this alone.
+//
+// Only for subdomains of ONE registrable domain. Genuinely different domains
+// are cross-site, which needs SameSite=None and a third-party cookie that
+// Safari already blocks; a Domain attribute cannot span them.
+const cookieDomain = process.env.COOKIE_DOMAIN?.trim() || null;
+
+if (cookieDomain && !cookieDomain.startsWith('.')) {
+  logger.warn(
+    `[auth] COOKIE_DOMAIN is "${cookieDomain}"; a leading dot (".${cookieDomain}") ` +
+      'is what scopes the cookie to every subdomain rather than one host.'
+  );
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: 'pg',
@@ -84,6 +108,19 @@ export const auth = betterAuth({
     },
   },
   advanced: {
+    // Shares the session cookie across subdomains of one registrable domain,
+    // so app.tourops.app and api.tourops.app both see it. Off unless
+    // COOKIE_DOMAIN is set, which keeps every existing deployment on the
+    // host-only cookie it has now.
+    //
+    // This also covers the OAuth state cookie, which is the half that
+    // actually bites: a state written on one host and read on another is the
+    // state_mismatch that made the frontend proxy auth through itself in the
+    // first place.
+    ...(cookieDomain
+      ? { crossSubDomainCookies: { enabled: true, domain: cookieDomain } }
+      : {}),
+
     ipAddress: {
       // Resolves the client IP for rate limiting. Order matters — first header
       // that yields a valid IP wins (@better-auth/core utils/ip.mjs `getIp`).
