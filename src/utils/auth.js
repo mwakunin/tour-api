@@ -89,6 +89,28 @@ if (cookieDomain) {
     );
   }
 
+  // A single label is never a domain somebody owns. "com" and "net" are
+  // public suffixes: browsers refuse a Domain attribute set to one, discard
+  // the cookie, and produce the same silent auth outage as the URL above.
+  // localhost is the exception, and a real one — it is what a local
+  // deployment sets.
+  const labels = cookieDomain.replace(/^\./, '').split('.');
+  if (labels.length < 2 && cookieDomain.replace(/^\./, '') !== 'localhost') {
+    throw new Error(
+      `[auth] COOKIE_DOMAIN "${cookieDomain}" is a single label. A cookie ` +
+        'Domain must be a domain you control, such as ".example.com" — a ' +
+        'public suffix like "com" is refused by every browser and the ' +
+        'session cookie is silently discarded.'
+    );
+  }
+
+  // WHAT THIS STILL DOES NOT CATCH, and deliberately. A multi-label public
+  // suffix — "co.uk", "github.io" — is equally invalid as a cookie Domain and
+  // passes here, because telling them apart from a real domain needs the
+  // Public Suffix List: a dependency carrying thousands of entries that goes
+  // stale between releases, to check one value an operator sets once at
+  // deploy. The single-label case is worth catching because it is a plausible
+  // slip; ".co.uk" would mean the operator owns no domain at all.
   if (!cookieDomain.startsWith('.')) {
     logger.warn(
       `[auth] COOKIE_DOMAIN is "${cookieDomain}"; a leading dot ` +
