@@ -23,9 +23,9 @@ export const requireAuth = async (req, res, next) => {
     req.user = session.user;
     req.session = session.session;
 
-    // Who they are AT this tenant, alongside who they are. Additive for now --
-    // requireRole below still reads req.user.role, so this decides nothing
-    // yet. It never throws; see attachMembership.
+    // Who they are AT this tenant, alongside who they are. requireRole below
+    // reads this and nothing else, so a failed lookup must not be mistaken for
+    // a held role -- attachMembership sets null on error and never throws.
     await attachMembership(req);
 
     next();
@@ -55,6 +55,21 @@ export const optionalAuth = async (req, res, next) => {
   }
 };
 
+// Membership roles that carry administrative authority AT one operator.
+// `owner` is included wherever `admin` is: it is strictly more privileged, and
+// leaving it out would lock an operator out of their own account.
+export const ADMIN_ROLES = ['owner', 'admin'];
+
+/**
+ * Whether the caller holds an administrative role at the CURRENT tenant.
+ *
+ * Reads req.membership, not req.user.role. The Better Auth row's `role` is one
+ * global string, so 'admin' there means admin of every operator -- which is
+ * precisely the authorization bug this replaces.
+ */
+export const isTenantAdmin = (req) =>
+  (req.membership?.roles ?? []).some((role) => ADMIN_ROLES.includes(role));
+
 export const requireRole = (allowedRoles) => {
   const rolesArray = Array.isArray(allowedRoles)
     ? allowedRoles
@@ -68,11 +83,27 @@ export const requireRole = (allowedRoles) => {
       });
     }
 
-    const userRole = req.user.role || 'user';
+    // null and [] are different faults and the log has to tell them apart.
+    // null means no tenant context existed to ask within -- a route mounted
+    // before resolveTenant, which is a wiring bug that would otherwise present
+    // as a mysterious 403 for a user who really is an admin. [] means the
+    // question was asked and answered: they hold nothing here.
+    if (!req.membership) {
+      logger.error(
+        `[Auth] No membership context for user ${req.user.id} on ${req.method} ${req.originalUrl}. ` +
+          'This route runs outside resolveTenant, so no tenant could be resolved to check against.'
+      );
+      return res.status(403).json({
+        error: 'Access denied',
+        message: 'Insufficient permissions',
+      });
+    }
 
-    if (!rolesArray.includes(userRole)) {
+    const held = req.membership.roles;
+
+    if (!held.some((role) => rolesArray.includes(role))) {
       logger.warn(
-        `[Auth] Access denied: user ${req.user.id} has role '${userRole}', required: [${rolesArray.join(', ')}]`
+        `[Auth] Access denied: user ${req.user.id} holds [${held.join(', ')}] at tenant ${req.membership.tenantId}, required: [${rolesArray.join(', ')}]`
       );
       return res.status(403).json({
         error: 'Access denied',
@@ -84,7 +115,7 @@ export const requireRole = (allowedRoles) => {
   };
 };
 
-export const requireAdmin = requireRole('admin');
+export const requireAdmin = requireRole(ADMIN_ROLES);
 
 export const requireOwnerOrAdmin = (getUserId) => {
   return (req, res, next) => {
@@ -98,7 +129,7 @@ export const requireOwnerOrAdmin = (getUserId) => {
     const resourceUserId =
       typeof getUserId === 'function' ? getUserId(req) : getUserId;
     const isOwner = req.user.id === resourceUserId;
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isTenantAdmin(req);
 
     if (!isOwner && !isAdmin) {
       logger.warn(`[Auth] Owner/Admin access denied for user ${req.user.id}`);
@@ -114,5 +145,8 @@ export const requireOwnerOrAdmin = (getUserId) => {
 };
 
 export const isAuthenticated = (req) => !!req.user;
-export const hasRole = (req, role) => req.user?.role === role;
+// Membership roles, not the global user.role. Callers asking "is this person
+// an admin" mean "here", and there is no other useful reading of the question.
+export const hasRole = (req, role) =>
+  (req.membership?.roles ?? []).includes(role);
 export const isOwner = (req, resourceUserId) => req.user?.id === resourceUserId;

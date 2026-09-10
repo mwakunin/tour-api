@@ -11,6 +11,11 @@ import {
   updateUserSchema,
 } from '#validations/users.validation.js';
 import { formatValidationError } from '#utils/format.js';
+import { isTenantAdmin } from '#middleware/auth.middleware.js';
+import {
+  isTenantMember,
+  belongsToOtherTenants,
+} from '#middleware/membership.middleware.js';
 
 // Log lines are newline-delimited, so an id carrying CR/LF can forge extra
 // entries. These are logged before validation runs, so they are sanitised here.
@@ -116,8 +121,9 @@ export const updateUserById = async (req, res, next) => {
       });
     }
 
-    // Allow users to update only their own information (except role)
-    if (req.user.role !== 'admin' && req.user.id !== id) {
+    // isTenantAdmin, not req.user.role: the Better Auth row's role is one
+    // global string, so 'admin' there meant admin at every operator.
+    if (!isTenantAdmin(req) && req.user.id !== id) {
       return res.status(403).json({
         error: 'Access denied',
         message: 'You can only update your own information',
@@ -125,7 +131,7 @@ export const updateUserById = async (req, res, next) => {
     }
 
     // Only admin users can change roles
-    if (updates.role && req.user.role !== 'admin') {
+    if (updates.role && !isTenantAdmin(req)) {
       return res.status(403).json({
         error: 'Access denied',
         message: 'Only administrators can change user roles',
@@ -133,8 +139,38 @@ export const updateUserById = async (req, res, next) => {
     }
 
     // Remove role from updates if non-admin user is trying to update their own profile
-    if (req.user.role !== 'admin') {
+    if (!isTenantAdmin(req)) {
       delete updates.role;
+    }
+
+    // The actor is authorized; the TARGET still has to be this operator's to
+    // touch. `user` is Better Auth's table -- global, no tenant_id, no RLS --
+    // so updateUser(id) reaches every operator's users, and an admin here
+    // could otherwise edit someone who belongs entirely to another operator.
+    //
+    // Only when acting on somebody else: a person updating their own profile
+    // is always entitled to, and a fresh sign-up holds no membership yet, so
+    // requiring one here would lock new users out of their own account.
+    if (req.user.id !== id && !(await isTenantMember(id))) {
+      // 404, not 403, and byte-for-byte the same body this handler already
+      // returns for an id that exists nowhere. A 403 -- or a differently
+      // worded 404 -- would confirm the id names a real account, which is
+      // exactly what an administrator at another operator must not be able to
+      // probe for. Indistinguishable is the point.
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Membership here is necessary but not sufficient. `user` is one global
+    // row shared by every operator the person works for, so editing it edits
+    // it everywhere -- and this administrator's authority stops at their own
+    // operator.
+    if (req.user.id !== id && (await belongsToOtherTenants(id))) {
+      return res.status(409).json({
+        error: 'Shared account',
+        message:
+          'This person also works for another operator, so their account ' +
+          'is not yours alone to change. Revoke their membership instead.',
+      });
     }
 
     const updatedUser = await updateUser(id, updates);
@@ -184,7 +220,7 @@ export const deleteUserById = async (req, res, next) => {
 
     // Authorization: Allow if user is deleting their own account OR if user is admin
     const isOwnAccount = req.user.id === id;
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isTenantAdmin(req);
 
     //Optional: Prevent admin from deleting themselves (uncomment if needed)
     if (isAdmin && isOwnAccount) {
@@ -199,6 +235,27 @@ export const deleteUserById = async (req, res, next) => {
       return res.status(403).json({
         error: 'Access denied',
         message: 'You can only delete your own account',
+      });
+    }
+
+    // Same boundary as the update path, and it matters more here: deleteUser
+    // removes the global Better Auth row, so an unscoped delete would destroy
+    // an account belonging to another operator entirely.
+    if (!isOwnAccount && !(await isTenantMember(id))) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Sharper here than on the update path. memberships.user_id is ON DELETE
+    // CASCADE, so removing this row does not just delete an account -- it
+    // silently strips the person from every other operator they work for. One
+    // administrator must not be able to do that to another's staff.
+    if (!isOwnAccount && (await belongsToOtherTenants(id))) {
+      return res.status(409).json({
+        error: 'Shared account',
+        message:
+          'This person also works for another operator, so deleting their ' +
+          'account would remove them there too. Revoke their membership ' +
+          'instead.',
       });
     }
 

@@ -25,12 +25,14 @@
 // situation a self-signup or an invitation-accept route exists to resolve.
 // Refusal belongs in the guard, not in the load.
 //
-// NOTHING READS THIS FOR AUTHORIZATION YET. requireRole still consults
-// req.user.role, so this file changes no access decision. Moving the call
-// sites over is a separate change.
+// requireRole and isTenantAdmin both read req.membership, so what this
+// function returns IS the access decision. A null return denies rather than
+// falls back -- see requireRole, which distinguishes null (no tenant context,
+// a wiring bug) from [] (asked and answered: they hold nothing here).
 
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 
+import { db } from '#config/database.js';
 import { memberships } from '#models/schema.js';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import logger from '#config/logger.js';
@@ -66,6 +68,82 @@ export const loadMembership = async (userId) => {
     tenantId,
     roles: rows.map((row) => row.role),
   };
+};
+
+/**
+ * Whether `userId` is known to the ambient tenant at all.
+ *
+ * The `user` table is Better Auth's: no tenant_id, no RLS, one global pool. So
+ * a handler that looks a user up by id reaches every operator's users, and an
+ * admin acting on `/users/:id` would otherwise be able to modify or delete
+ * someone who belongs entirely to a different operator. Membership is the only
+ * thing that says whose user this is.
+ *
+ * Deliberately NOT filtered on is_active. The question here is "is this person
+ * one of ours", and someone whose access was revoked still is -- filtering
+ * them out would make deactivating a member the one thing that put them beyond
+ * an administrator's reach, which is backwards. `is_active` governs what they
+ * may do, not what may be done to them.
+ *
+ * Reads through withTenantDb, so the RLS policy scopes the rows to the current
+ * tenant. There is no tenant_id in the WHERE clause because the policy is what
+ * makes this correct, not a filter somebody has to remember to write.
+ */
+export const isTenantMember = async (userId) => {
+  if (!currentTenantId() || !userId) return false;
+
+  const rows = await withTenantDb((tx) =>
+    tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(eq(memberships.user_id, userId))
+      .limit(1)
+  );
+
+  return rows.length > 0;
+};
+
+/**
+ * Whether `userId` also belongs to some operator OTHER than the ambient one.
+ *
+ * `user` is one global row shared by every operator the person works for, so a
+ * mutation of it is not confined to the tenant that performs it. Renaming or
+ * re-emailing a shared account changes it everywhere, and DELETE is worse:
+ * memberships.user_id is ON DELETE CASCADE, so removing the user row silently
+ * removes that person from every other operator too. An administrator at one
+ * operator has no authority to do either.
+ *
+ * THIS ONE USES THE OWNER CONNECTION, DELIBERATELY.
+ *
+ * It has to. The RLS policy on `memberships` restricts the runtime connection
+ * to the current tenant's rows, so from inside tenant A the question "does this
+ * person also belong to B?" is unanswerable by construction -- every such row
+ * is invisible. It is the same shape of question as tenant resolution, which
+ * bypasses RLS for the same reason (see tenant.middleware.js).
+ *
+ * It is safe because of what it returns, not where it sits: a boolean derived
+ * from at most one row, selecting a single column, for a user id the caller has
+ * already been shown belongs to their own tenant. It cannot enumerate operators
+ * and it exposes no data about them.
+ *
+ * Fails CLOSED. With no tenant context there is no "other" to compare against,
+ * so it reports true and the caller refuses -- an unanswerable safety question
+ * is not a yes.
+ */
+export const belongsToOtherTenants = async (userId) => {
+  const tenantId = currentTenantId();
+
+  if (!tenantId || !userId) return true;
+
+  const rows = await db
+    .select({ tenant_id: memberships.tenant_id })
+    .from(memberships)
+    .where(
+      and(eq(memberships.user_id, userId), ne(memberships.tenant_id, tenantId))
+    )
+    .limit(1);
+
+  return rows.length > 0;
 };
 
 /**

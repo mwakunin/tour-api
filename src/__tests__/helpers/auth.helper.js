@@ -6,9 +6,26 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { db } from '#config/database.js';
 import { user } from '#models/user.model.js';
+import { memberships } from '#models/membership.model.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import { eq } from 'drizzle-orm';
 
 const TEST_PASSWORD = 'TestPassword123!';
+
+/**
+ * Attaches a user to the seeded operator.
+ *
+ * Authority and even visibility now come from `memberships`, not from
+ * `user.role`. With TENANT_HOST_SUFFIX unset -- every deployment and every
+ * test -- resolveTenant returns the seeded tenant, so that is where a test
+ * user has to be a member for an admin to be able to act on them at all.
+ */
+export const grantSeedMembership = async (userId, role) => {
+  await db
+    .insert(memberships)
+    .values({ tenant_id: SEED_TENANT_ID, user_id: userId, role })
+    .onConflictDoNothing();
+};
 
 /**
  * Create a real user via Better Auth's sign-up endpoint, using a fresh
@@ -33,15 +50,25 @@ export const createAuthenticatedAgent = async (app, redis, opts = {}) => {
 
   const newUser = response.body.user;
 
+  // Every user in this deployment is one of the seeded operator's users --
+  // true of everyone the 0029 backfill covered, and true of every sign-up once
+  // the databaseHooks entry lands. The helper models that, rather than the
+  // transient gap where sign-up creates no membership.
+  await grantSeedMembership(newUser.id, 'customer');
+
   return { agent, user: newUser, sessionId: newUser.id, email };
 };
 
 /**
  * Create an authenticated ADMIN agent.
- * Better Auth always creates users with role 'user' by default,
- * so we sign up normally, then promote the user to admin directly in DB.
- * Better Auth sessions store role at sign-in time in some configs, so we
- * re-sign-in after promotion to guarantee the session reflects the new role.
+ *
+ * Authority comes from an admin MEMBERSHIP at the tenant the request resolves
+ * to, not from user.role -- that column is one global string and granting it
+ * would have made the holder an admin at every operator, which is the bug the
+ * memberships table exists to fix.
+ *
+ * user.role is still set to 'admin' because the users admin screen filters and
+ * reports on it, and tests assert those counts. It confers nothing.
  */
 export const createAuthenticatedAdminAgent = async (app) => {
   const agent = request.agent(app);
@@ -53,12 +80,16 @@ export const createAuthenticatedAdminAgent = async (app) => {
     .post('/api/auth/sign-up/email')
     .send({ email, password: TEST_PASSWORD, name });
 
-  // Promote to admin directly in the DB
   const [admin] = await db
     .update(user)
     .set({ role: 'admin' })
     .where(eq(user.email, email))
     .returning();
+
+  // The grant that actually matters. Seeded tenant, because that is what
+  // resolveTenant returns with TENANT_HOST_SUFFIX unset -- which is every
+  // deployment and every test today.
+  await grantSeedMembership(admin.id, 'admin');
 
   // Re-sign-in so the session reflects the updated role
   await agent
@@ -85,6 +116,10 @@ export const createMockUser = async () => {
       role: 'user',
     })
     .returning();
+
+  // A mock user stands for one of this operator's users. Without a membership
+  // an admin acting on them gets 404, because they would belong to nobody.
+  await grantSeedMembership(newUser.id, 'customer');
 
   return newUser;
 };

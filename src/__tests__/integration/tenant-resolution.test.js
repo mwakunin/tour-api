@@ -12,6 +12,7 @@ import app from '../../app.js';
 import { db, initDatabase } from '#config/database.js';
 import redis from '#config/redis.js';
 import { tenants } from '#models/schema.js';
+import { memberships } from '#models/membership.model.js';
 import { counterparties } from '#models/money.model.js';
 import {
   createAuthenticatedAdminAgent,
@@ -186,7 +187,41 @@ describe('tenant resolution', () => {
       await redis.quit();
     });
 
+    it("refuses an operator's hostname to an admin who is not a member there", async () => {
+      // This assertion used to be `.expect(200)`, and the test only checked
+      // that the two hostnames returned DIFFERENT rows. That is the hole
+      // written down as a passing test: a seeded-tenant admin reached Alpha's
+      // hostname and was served Alpha's supplier list, because authority came
+      // from the global user.role and resolution alone decided whose data to
+      // read.
+      //
+      // Authentication is global — a person may work for two operators — so
+      // resolution cannot be what separates them. Membership is.
+      await adminAgent
+        .get('/api/counterparties')
+        .set('Host', `alpha-resolution.${SUFFIX}`)
+        .expect(403);
+
+      // Same session, same route, the hostname they DO hold a membership at.
+      await adminAgent
+        .get('/api/counterparties')
+        .set('Host', `api.${SUFFIX}`)
+        .expect(200);
+    });
+
     it('serves the operator its hostname names, and only that operator', async () => {
+      // The original intent of the test above, preserved: with a membership at
+      // Alpha, the admin gets through, and what they get is Alpha's data and
+      // not the seeded tenant's.
+      await db
+        .insert(memberships)
+        .values({
+          tenant_id: TENANT_ALPHA,
+          user_id: testAdmin.id,
+          role: 'admin',
+        })
+        .onConflictDoNothing();
+
       const alpha = await adminAgent
         .get('/api/counterparties')
         .set('Host', `alpha-resolution.${SUFFIX}`)
@@ -195,9 +230,6 @@ describe('tenant resolution', () => {
       expect(alpha.body.data).toHaveLength(1);
       expect(alpha.body.data[0].name).toBe('Alpha-only lodge');
 
-      // The same session, the same route, a different hostname. Authentication
-      // is global — a person may work for two operators — so nothing but
-      // resolution separates these two responses.
       const seeded = await adminAgent
         .get('/api/counterparties')
         .set('Host', `api.${SUFFIX}`)
