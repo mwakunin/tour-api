@@ -1,10 +1,17 @@
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { eq, inArray } from 'drizzle-orm';
 
+import app from '../../app.js';
+import redis from '#config/redis.js';
 import { db } from '#config/database.js';
 import { runWithTenant, withTenantDb } from '#config/tenantContext.js';
 import { tenants, memberships, user } from '#models/schema.js';
 import { loadMembership } from '#middleware/membership.middleware.js';
+import {
+  createAuthenticatedAdminAgent,
+  deleteTestUser,
+  cleanupTestSession,
+} from '../helpers/auth.helper.js';
 
 // The point of this table is that a session cookie which reaches the wrong
 // operator's hostname finds NOTHING, rather than finding a row that some
@@ -161,5 +168,48 @@ describe('memberships', () => {
       .update(memberships)
       .set({ is_active: true })
       .where(eq(memberships.user_id, bob.id));
+  });
+});
+
+describe('authorization comes from the membership, over HTTP', () => {
+  let adminAgent;
+  let testAdmin;
+  let adminSessionId;
+
+  beforeAll(async () => {
+    const auth = await createAuthenticatedAdminAgent(app);
+    adminAgent = auth.agent;
+    testAdmin = auth.user;
+    adminSessionId = auth.sessionId;
+  });
+
+  afterAll(async () => {
+    await deleteTestUser(testAdmin.id);
+    await cleanupTestSession(redis, adminSessionId);
+    await redis.quit();
+  });
+
+  it('revoking the membership revokes admin, without touching the session', async () => {
+    await adminAgent.get('/api/counterparties').expect(200);
+
+    // What an operator does when somebody leaves. The row stays so the record
+    // of who could once act survives; is_active is what stops them acting.
+    await db
+      .update(memberships)
+      .set({ is_active: false })
+      .where(eq(memberships.user_id, testAdmin.id));
+
+    // Same agent, same cookie, same still-valid session. Authentication did
+    // not change -- authority did, and that is the separation the memberships
+    // table exists to make possible. Under user.role this would have needed a
+    // write to the Better Auth row and a re-sign-in to take effect.
+    await adminAgent.get('/api/counterparties').expect(403);
+
+    await db
+      .update(memberships)
+      .set({ is_active: true })
+      .where(eq(memberships.user_id, testAdmin.id));
+
+    await adminAgent.get('/api/counterparties').expect(200);
   });
 });

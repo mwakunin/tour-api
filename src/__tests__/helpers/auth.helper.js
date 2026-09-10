@@ -6,6 +6,8 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { db } from '#config/database.js';
 import { user } from '#models/user.model.js';
+import { memberships } from '#models/membership.model.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import { eq } from 'drizzle-orm';
 
 const TEST_PASSWORD = 'TestPassword123!';
@@ -38,10 +40,14 @@ export const createAuthenticatedAgent = async (app, redis, opts = {}) => {
 
 /**
  * Create an authenticated ADMIN agent.
- * Better Auth always creates users with role 'user' by default,
- * so we sign up normally, then promote the user to admin directly in DB.
- * Better Auth sessions store role at sign-in time in some configs, so we
- * re-sign-in after promotion to guarantee the session reflects the new role.
+ *
+ * Authority comes from an admin MEMBERSHIP at the tenant the request resolves
+ * to, not from user.role -- that column is one global string and granting it
+ * would have made the holder an admin at every operator, which is the bug the
+ * memberships table exists to fix.
+ *
+ * user.role is still set to 'admin' because the users admin screen filters and
+ * reports on it, and tests assert those counts. It confers nothing.
  */
 export const createAuthenticatedAdminAgent = async (app) => {
   const agent = request.agent(app);
@@ -53,12 +59,23 @@ export const createAuthenticatedAdminAgent = async (app) => {
     .post('/api/auth/sign-up/email')
     .send({ email, password: TEST_PASSWORD, name });
 
-  // Promote to admin directly in the DB
   const [admin] = await db
     .update(user)
     .set({ role: 'admin' })
     .where(eq(user.email, email))
     .returning();
+
+  // The grant that actually matters. Seeded tenant, because that is what
+  // resolveTenant returns with TENANT_HOST_SUFFIX unset -- which is every
+  // deployment and every test today.
+  await db
+    .insert(memberships)
+    .values({
+      tenant_id: SEED_TENANT_ID,
+      user_id: admin.id,
+      role: 'admin',
+    })
+    .onConflictDoNothing();
 
   // Re-sign-in so the session reflects the updated role
   await agent

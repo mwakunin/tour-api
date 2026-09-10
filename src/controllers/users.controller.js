@@ -11,6 +11,7 @@ import {
   updateUserSchema,
 } from '#validations/users.validation.js';
 import { formatValidationError } from '#utils/format.js';
+import { isTenantAdmin } from '#middleware/auth.middleware.js';
 
 // Log lines are newline-delimited, so an id carrying CR/LF can forge extra
 // entries. These are logged before validation runs, so they are sanitised here.
@@ -116,8 +117,9 @@ export const updateUserById = async (req, res, next) => {
       });
     }
 
-    // Allow users to update only their own information (except role)
-    if (req.user.role !== 'admin' && req.user.id !== id) {
+    // isTenantAdmin, not req.user.role: the Better Auth row's role is one
+    // global string, so 'admin' there meant admin at every operator.
+    if (!isTenantAdmin(req) && req.user.id !== id) {
       return res.status(403).json({
         error: 'Access denied',
         message: 'You can only update your own information',
@@ -125,7 +127,7 @@ export const updateUserById = async (req, res, next) => {
     }
 
     // Only admin users can change roles
-    if (updates.role && req.user.role !== 'admin') {
+    if (updates.role && !isTenantAdmin(req)) {
       return res.status(403).json({
         error: 'Access denied',
         message: 'Only administrators can change user roles',
@@ -133,7 +135,7 @@ export const updateUserById = async (req, res, next) => {
     }
 
     // Remove role from updates if non-admin user is trying to update their own profile
-    if (req.user.role !== 'admin') {
+    if (!isTenantAdmin(req)) {
       delete updates.role;
     }
 
@@ -184,7 +186,7 @@ export const deleteUserById = async (req, res, next) => {
 
     // Authorization: Allow if user is deleting their own account OR if user is admin
     const isOwnAccount = req.user.id === id;
-    const isAdmin = req.user.role === 'admin';
+    const isAdmin = isTenantAdmin(req);
 
     //Optional: Prevent admin from deleting themselves (uncomment if needed)
     if (isAdmin && isOwnAccount) {

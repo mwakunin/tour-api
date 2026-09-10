@@ -38,10 +38,9 @@
 // staff at one, customer at another -- and because an operator must not be
 // able to grant authority outside itself.
 //
-// Nothing reads this for authorization yet. The middleware populates
-// req.membership and the existing requireRole keeps using req.user.role, so
-// this change is additive: it cannot alter a single access decision. Moving
-// the twenty call sites over is a separate change, where the risk lives.
+// requireRole reads this. `req.user.role` is no longer consulted for any
+// access decision -- it survives only as a column the users admin screen
+// filters and reports on.
 
 import {
   pgTable,

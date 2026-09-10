@@ -25,9 +25,10 @@
 // situation a self-signup or an invitation-accept route exists to resolve.
 // Refusal belongs in the guard, not in the load.
 //
-// NOTHING READS THIS FOR AUTHORIZATION YET. requireRole still consults
-// req.user.role, so this file changes no access decision. Moving the call
-// sites over is a separate change.
+// requireRole and isTenantAdmin both read req.membership, so what this
+// function returns IS the access decision. A null return denies rather than
+// falls back -- see requireRole, which distinguishes null (no tenant context,
+// a wiring bug) from [] (asked and answered: they hold nothing here).
 
 import { eq, and } from 'drizzle-orm';
 

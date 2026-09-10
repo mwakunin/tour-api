@@ -22,6 +22,7 @@ import {
   bookingPriceAdjustmentSchema,
 } from '#validations/booking.validation.js';
 import { paginationSchema, uuidParamSchema } from '#validations/common.js';
+import { isTenantAdmin } from '#middleware/auth.middleware.js';
 import {
   bookingPnl,
   BOOKING_NOT_FOUND as PNL_BOOKING_NOT_FOUND,
@@ -144,8 +145,9 @@ export const getBooking = async (req, res, next) => {
       });
     }
 
-    // Only allow user to see their own booking or admin
-    if (data.user_id !== req.user.id && req.user.role !== 'admin') {
+    // isTenantAdmin, not req.user.role: an admin at another operator must not
+    // be able to read this operator's bookings.
+    if (data.user_id !== req.user.id && !isTenantAdmin(req)) {
       return res.status(403).json({
         success: false,
         error: 'Access denied',
@@ -293,7 +295,7 @@ export const cancelBookingController = async (req, res, next) => {
     }
 
     // Only allow user to cancel their own booking or admin
-    if (existingBooking.user_id !== userId && req.user.role !== 'admin') {
+    if (existingBooking.user_id !== userId && !isTenantAdmin(req)) {
       return res.status(403).json({
         success: false,
         error: 'Access denied',
@@ -349,7 +351,7 @@ export const updateBookingController = async (req, res, next) => {
     }
 
     // Check ownership
-    if (existingBooking.data.user_id !== userId && req.user.role !== 'admin') {
+    if (existingBooking.data.user_id !== userId && !isTenantAdmin(req)) {
       return res.status(403).json({ success: false, error: 'Access denied' });
     }
 
@@ -383,7 +385,7 @@ export const updateBookingController = async (req, res, next) => {
     // size, the same way createBooking derives it — so a client can never send
     // a total that disagrees with the rate the customer was quoted.
     let repricing = null;
-    if (req.user.role === 'admin' && req.body.price_per_person !== undefined) {
+    if (isTenantAdmin(req) && req.body.price_per_person !== undefined) {
       const priceResult = bookingPriceAdjustmentSchema.safeParse({
         price_per_person: req.body.price_per_person,
       });
