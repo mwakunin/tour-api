@@ -20,6 +20,23 @@ import { currentTenantId } from '#config/tenantContext.js';
 //
 // Falling back to FRONTEND_URL keeps a deploy that has not set TRUSTED_ORIGINS yet
 // behaving exactly as before — a single origin is a valid one-element list.
+// WILDCARDS ARE SUPPORTED, AND NEEDED ONCE OPERATORS HAVE HOSTNAMES.
+//
+// better-auth matches a pattern containing `*` with wildcardMatch rather than
+// string equality, so an unbounded set of tenant origins can be expressed
+// without an env edit per customer:
+//
+//   TRUSTED_ORIGINS=https://*.tourops.com
+//
+// Verified against 1.6.23's matcher rather than assumed. Two things it does
+// that are worth knowing:
+//
+//   * the protocol is part of the match, so `http://acme.tourops.com` is
+//     rejected by that pattern
+//   * `*` spans dots, so it also matches `evil.acme.tourops.com` -- a nested
+//     subdomain. _slugForHost returns UNRESOLVABLE for a label containing a
+//     dot and the request 404s before anything reads the session, so the two
+//     layers cover each other. Do not rely on this one alone.
 const trustedOrigins = (
   process.env.TRUSTED_ORIGINS ||
   process.env.FRONTEND_URL ||
