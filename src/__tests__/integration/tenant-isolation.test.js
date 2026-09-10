@@ -4,7 +4,14 @@ import { eq } from 'drizzle-orm';
 import { db } from '#config/database.js';
 import { appPool } from '#config/appDatabase.js';
 import { runWithTenant, withTenantDb } from '#config/tenantContext.js';
-import { tenants, counterparties, fx_rates } from '#models/schema.js';
+import {
+  tenants,
+  counterparties,
+  fx_rates,
+  bookings,
+  tours,
+} from '#models/schema.js';
+import { createTestTour } from '../helpers/tour.helper.js';
 
 // Isolation is a property of the database, not of the code that queries it.
 // These tests go through the same appDb path a handler would, so they fail if
@@ -62,9 +69,62 @@ describe('tenant isolation (RLS)', () => {
     await db
       .delete(counterparties)
       .where(eq(counterparties.tenant_id, TENANT_B));
+    await db.delete(bookings).where(eq(bookings.tenant_id, TENANT_A));
+    await db.delete(tours).where(eq(tours.tenant_id, TENANT_A));
     await db.delete(tenants).where(eq(tenants.id, TENANT_A));
     await db.delete(tenants).where(eq(tenants.id, TENANT_B));
     await appPool.end({ timeout: 5 });
+  });
+
+  // Why this one exists: a review flagged the ownership exception in
+  // booking.controller.js -- `booking.user_id === req.user.id` -- as missing an
+  // authorization check, on the grounds that owning a booking does not prove
+  // membership in the resolved tenant. True, and irrelevant: the BOOKING's
+  // tenancy is what matters, and it is settled before that line runs.
+  //
+  // booking.service.js reads exclusively through withTenantDb and never the
+  // owner connection, and `bookings` carries ENABLE + FORCE ROW LEVEL SECURITY
+  // from migration 0010. So a booking that reaches the ownership check is
+  // already known to belong to the resolved tenant. There was no test saying
+  // so, which is why the question could be asked at all.
+  it('hides a booking from every tenant but its own', async () => {
+    const tour = await createTestTour({ tenant_id: TENANT_A });
+
+    const [booking] = await db
+      .insert(bookings)
+      .values({
+        tenant_id: TENANT_A,
+        booking_reference: `TA-${Date.now()}`.slice(0, 20),
+        tour_id: tour.id,
+        group_size: 2,
+        start_date: new Date('2027-01-10'),
+        end_date: new Date('2027-01-13'),
+        price_per_person_cents: 120000,
+        total_price_cents: 240000,
+        currency: 'USD',
+        customer_name: 'Alpha Customer',
+        customer_email: 'alpha-customer@example.com',
+      })
+      .returning();
+
+    // Its own tenant sees it.
+    const mine = await runWithTenant(TENANT_A, () =>
+      withTenantDb((tx) =>
+        tx.select().from(bookings).where(eq(bookings.id, booking.id))
+      )
+    );
+    expect(mine).toHaveLength(1);
+
+    // Another tenant does not -- not "sees it and is refused", but cannot
+    // retrieve the row at all. That is what makes the ownership comparison in
+    // the controller safe: it never runs against a foreign booking, because
+    // the fetch that precedes it returns nothing.
+    const theirs = await runWithTenant(TENANT_B, () =>
+      withTenantDb((tx) =>
+        tx.select().from(bookings).where(eq(bookings.id, booking.id))
+      )
+    );
+    expect(theirs).toHaveLength(0);
   });
 
   it('refuses to query without a tenant context', async () => {
