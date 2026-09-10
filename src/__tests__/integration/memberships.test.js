@@ -268,6 +268,26 @@ describe('authorization comes from the membership, over HTTP', () => {
     await deleteTestUser(fresh.id);
   });
 
+  it('gives every new sign-up a customer membership at the resolved tenant', async () => {
+    // Before the hook, registration produced a user belonging to nobody: the
+    // 0029 backfill covered everyone who already existed and every sign-up
+    // after it created another orphan.
+    const { user: fresh } = await createAuthenticatedAgent(app, redis);
+
+    const held = await runWithTenant(SEED_TENANT_ID, () =>
+      loadMembership(fresh.id)
+    );
+
+    expect(held.roles).toEqual(['customer']);
+
+    // customer, not admin or staff. Registration is the public booking path,
+    // so there must be no self-service route to authority.
+    expect(held.roles).not.toContain('admin');
+    expect(held.roles).not.toContain('owner');
+
+    await deleteTestUser(fresh.id);
+  });
+
   it('will not mutate a user who also works for another operator', async () => {
     // Membership here is necessary but not sufficient. `user` is ONE global
     // row shared by every operator the person works for, so an update reaches

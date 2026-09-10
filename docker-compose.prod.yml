@@ -36,8 +36,23 @@ services:
       - tourops-network
     restart: always
 
+  # SINGLE-HOST BY DEFAULT.
+  #
+  # For per-operator hostnames (*.api.example.com) three things change
+  # together, and none works without the others:
+  #
+  #   1. build the image from deploy/caddy.Dockerfile instead of pulling
+  #      caddy:2-alpine -- the Cloudflare DNS module is compiled in, and
+  #      HTTP-01 cannot issue a wildcard certificate
+  #   2. mount deploy/Caddyfile.wildcard instead of deploy/Caddyfile
+  #   3. set CLOUDFLARE_API_TOKEN (Zone -> DNS -> Edit on that zone)
+  #
+  # See OPERATIONS.md, "Per-operator hostnames".
   caddy:
     image: caddy:2-alpine
+    # build:
+    #   context: .
+    #   dockerfile: deploy/caddy.Dockerfile
     container_name: tourops-caddy-prod
     depends_on:
       - api
@@ -50,8 +65,14 @@ services:
       # certificate for exactly this name, so a mismatch with DNS fails the
       # ACME challenge rather than serving a wrong certificate.
       - API_PUBLIC_HOST=${API_PUBLIC_HOST:?set API_PUBLIC_HOST, e.g. api.example.com}
+      # Only read by Caddyfile.wildcard. Renewal infrastructure rather than a
+      # deploy secret: without it certificates stop renewing 90 days later,
+      # which surfaces as an outage rather than an error.
+      # - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN:-}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # For per-operator hostnames, replace the line above with:
+      # - ./deploy/Caddyfile.wildcard:/etc/caddy/Caddyfile:ro
       # Issued certificates and the ACME account key. Without these volumes
       # every restart re-requests a certificate and Let's Encrypt's rate limit
       # (5 duplicate certificates per week) locks the deploy out.
