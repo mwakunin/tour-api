@@ -30,8 +30,9 @@
 // falls back -- see requireRole, which distinguishes null (no tenant context,
 // a wiring bug) from [] (asked and answered: they hold nothing here).
 
-import { eq, and } from 'drizzle-orm';
+import { eq, and, ne } from 'drizzle-orm';
 
+import { db } from '#config/database.js';
 import { memberships } from '#models/schema.js';
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
 import logger from '#config/logger.js';
@@ -98,6 +99,49 @@ export const isTenantMember = async (userId) => {
       .where(eq(memberships.user_id, userId))
       .limit(1)
   );
+
+  return rows.length > 0;
+};
+
+/**
+ * Whether `userId` also belongs to some operator OTHER than the ambient one.
+ *
+ * `user` is one global row shared by every operator the person works for, so a
+ * mutation of it is not confined to the tenant that performs it. Renaming or
+ * re-emailing a shared account changes it everywhere, and DELETE is worse:
+ * memberships.user_id is ON DELETE CASCADE, so removing the user row silently
+ * removes that person from every other operator too. An administrator at one
+ * operator has no authority to do either.
+ *
+ * THIS ONE USES THE OWNER CONNECTION, DELIBERATELY.
+ *
+ * It has to. The RLS policy on `memberships` restricts the runtime connection
+ * to the current tenant's rows, so from inside tenant A the question "does this
+ * person also belong to B?" is unanswerable by construction -- every such row
+ * is invisible. It is the same shape of question as tenant resolution, which
+ * bypasses RLS for the same reason (see tenant.middleware.js).
+ *
+ * It is safe because of what it returns, not where it sits: a boolean derived
+ * from at most one row, selecting a single column, for a user id the caller has
+ * already been shown belongs to their own tenant. It cannot enumerate operators
+ * and it exposes no data about them.
+ *
+ * Fails CLOSED. With no tenant context there is no "other" to compare against,
+ * so it reports true and the caller refuses -- an unanswerable safety question
+ * is not a yes.
+ */
+export const belongsToOtherTenants = async (userId) => {
+  const tenantId = currentTenantId();
+
+  if (!tenantId || !userId) return true;
+
+  const rows = await db
+    .select({ tenant_id: memberships.tenant_id })
+    .from(memberships)
+    .where(
+      and(eq(memberships.user_id, userId), ne(memberships.tenant_id, tenantId))
+    )
+    .limit(1);
 
   return rows.length > 0;
 };

@@ -22,8 +22,23 @@ import {
 // middleware does, which means they fail if the policy, the role or the
 // transaction scoping regresses.
 
-const TENANT_A = '00000000-0000-0000-0000-0000000000c1';
-const TENANT_B = '00000000-0000-0000-0000-0000000000c2';
+// Namespaced ae0x, and not shared with any other suite. c1/c2/c3 were each
+// already claimed by tenant-resolution.test.js and money-service.test.js, and
+// jest runs these in one database with --runInBand: this suite inserted a
+// tenant another suite's teardown then deleted, and vice versa. The c3 clash
+// failed outright; c1/c2 were quietly survivable only because every insert used
+// onConflictDoNothing, which is a coincidence rather than a design.
+const TENANT_A = '00000000-0000-0000-0000-00000000ae01';
+const TENANT_B = '00000000-0000-0000-0000-00000000ae02';
+
+// Generated per run rather than fixed. A fixed id collided with
+// money-service.test.js -- jest runs every suite against one database with
+// --runInBand -- and the fixed slug then survived the failure and poisoned
+// every later run, because the cleanup was inside the test and the test had
+// already failed. Random id, unique slug, and teardown in `finally`: none of
+// those three failure modes is available any more.
+const SHARED_TENANT = crypto.randomUUID();
+const SHARED_SLUG = `mem-shared-${Date.now()}`;
 
 let alice;
 let bob;
@@ -253,6 +268,71 @@ describe('authorization comes from the membership, over HTTP', () => {
     await deleteTestUser(fresh.id);
   });
 
+  it('will not mutate a user who also works for another operator', async () => {
+    // Membership here is necessary but not sufficient. `user` is ONE global
+    // row shared by every operator the person works for, so an update reaches
+    // all of them -- and DELETE is worse, because memberships.user_id is
+    // ON DELETE CASCADE: removing the row strips them from the other operator
+    // too, silently.
+    const { user: shared } = await createAuthenticatedAgent(app, redis);
+
+    try {
+      // The helper made them a member here. Now also make them a member
+      // somewhere else -- the case the whole memberships design exists to
+      // support: one login, several operators.
+      await db.insert(tenants).values({
+        id: SHARED_TENANT,
+        name: 'The Other Operator',
+        slug: SHARED_SLUG,
+        booking_ref_prefix: 'MS',
+      });
+      await db.insert(memberships).values({
+        tenant_id: SHARED_TENANT,
+        user_id: shared.id,
+        role: 'staff',
+      });
+
+      await adminAgent
+        .put(`/api/users/${shared.id}`)
+        .send({ name: 'Renamed by one of two employers' })
+        .expect(409);
+
+      await adminAgent.delete(`/api/users/${shared.id}`).expect(409);
+
+      // Still there, still theirs, still a member of both.
+      const [survivor] = await db
+        .select()
+        .from(user)
+        .where(eq(user.id, shared.id));
+      expect(survivor).toBeDefined();
+      expect(survivor.name).not.toBe('Renamed by one of two employers');
+
+      const elsewhere = await db
+        .select()
+        .from(memberships)
+        .where(eq(memberships.tenant_id, SHARED_TENANT));
+      expect(elsewhere).toHaveLength(1);
+    } finally {
+      // In `finally`, so a failed assertion does not leave a tenant behind for
+      // the next run to trip over. That is exactly what happened once.
+      await db.delete(user).where(eq(user.id, shared.id));
+      await db.delete(tenants).where(eq(tenants.id, SHARED_TENANT));
+    }
+  });
+
+  it("still mutates a user who is only this operator's", async () => {
+    // The containment check must not turn into "admins can never act". A user
+    // who belongs to this operator and nowhere else is still theirs to manage.
+    const { user: ours } = await createAuthenticatedAgent(app, redis);
+
+    await adminAgent
+      .put(`/api/users/${ours.id}`)
+      .send({ name: 'Renamed by their only employer' })
+      .expect(200);
+
+    await adminAgent.delete(`/api/users/${ours.id}`).expect(200);
+  });
+
   it("will not force-logout a user who is not this operator's", async () => {
     // forceLogout takes :userId straight from the path and hands it to
     // revokeUserSessions, which indexes Better Auth's global user table. An
@@ -268,9 +348,7 @@ describe('authorization comes from the membership, over HTTP', () => {
       })
       .returning();
 
-    await adminAgent
-      .post(`/api/auth/force-logout/${outsider.id}`)
-      .expect(404);
+    await adminAgent.post(`/api/auth/force-logout/${outsider.id}`).expect(404);
 
     await db.delete(user).where(eq(user.id, outsider.id));
   });

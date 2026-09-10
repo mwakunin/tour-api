@@ -12,7 +12,10 @@ import {
 } from '#validations/users.validation.js';
 import { formatValidationError } from '#utils/format.js';
 import { isTenantAdmin } from '#middleware/auth.middleware.js';
-import { isTenantMember } from '#middleware/membership.middleware.js';
+import {
+  isTenantMember,
+  belongsToOtherTenants,
+} from '#middleware/membership.middleware.js';
 
 // Log lines are newline-delimited, so an id carrying CR/LF can forge extra
 // entries. These are logged before validation runs, so they are sanitised here.
@@ -157,6 +160,19 @@ export const updateUserById = async (req, res, next) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // Membership here is necessary but not sufficient. `user` is one global
+    // row shared by every operator the person works for, so editing it edits
+    // it everywhere -- and this administrator's authority stops at their own
+    // operator.
+    if (req.user.id !== id && (await belongsToOtherTenants(id))) {
+      return res.status(409).json({
+        error: 'Shared account',
+        message:
+          'This person also works for another operator, so their account ' +
+          'is not yours alone to change. Revoke their membership instead.',
+      });
+    }
+
     const updatedUser = await updateUser(id, updates);
 
     logger.info(`User ${updatedUser.id} updated successfully`);
@@ -227,6 +243,20 @@ export const deleteUserById = async (req, res, next) => {
     // an account belonging to another operator entirely.
     if (!isOwnAccount && !(await isTenantMember(id))) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Sharper here than on the update path. memberships.user_id is ON DELETE
+    // CASCADE, so removing this row does not just delete an account -- it
+    // silently strips the person from every other operator they work for. One
+    // administrator must not be able to do that to another's staff.
+    if (!isOwnAccount && (await belongsToOtherTenants(id))) {
+      return res.status(409).json({
+        error: 'Shared account',
+        message:
+          'This person also works for another operator, so deleting their ' +
+          'account would remove them there too. Revoke their membership ' +
+          'instead.',
+      });
     }
 
     const deletedUser = await deleteUser(id);
