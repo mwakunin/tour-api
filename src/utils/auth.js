@@ -4,6 +4,8 @@ import { db } from '#config/database.js';
 import logger from '#config/logger.js';
 import * as schema from '#models/schema.js';
 import { emailService } from '#services/email.service.js';
+import { memberships } from '#models/membership.model.js';
+import { currentTenantId } from '#config/tenantContext.js';
 
 // `trustedOrigins` is a SET of origins better-auth accepts as a callbackURL or
 // redirect target, so it is comma-separated — apex, www and a preview URL can be
@@ -206,4 +208,65 @@ export const auth = betterAuth({
     },
   },
   trustedOrigins,
+
+  databaseHooks: {
+    user: {
+      create: {
+        /**
+         * Attaches every new account to the operator it registered with.
+         *
+         * Without this a sign-up produced a user belonging to nobody. The
+         * 0029 backfill covered everyone who existed when memberships landed,
+         * and then every registration after it created another orphan --
+         * invisible while authorization only asked about admins, and a
+         * lockout the moment anything asks "which operator is this person's".
+         *
+         * The tenant comes from AsyncLocalStorage, which is why app.js had to
+         * move resolveTenant in front of /api/auth: by the time any later
+         * middleware runs, this hook has already fired.
+         */
+        after: async (created) => {
+          const tenantId = currentTenantId();
+
+          if (!tenantId) {
+            // Not fatal, and deliberately not. The account exists -- better-
+            // auth has already committed it -- so throwing here would leave a
+            // user who cannot sign up again (the email is taken) and cannot be
+            // helped by trying. Loud, and recoverable by granting the
+            // membership by hand.
+            logger.error(
+              '[auth] user created with no tenant context, so no membership ' +
+                'was granted. They will be treated as belonging to no ' +
+                'operator until one is added.',
+              { userId: created.id }
+            );
+            return;
+          }
+
+          try {
+            // Owner connection: `db` is what better-auth is configured with,
+            // and this runs inside better-auth's own transaction rather than
+            // under withTenantDb. The tenant_id written is the resolved one,
+            // so the row lands where the RLS policy would have put it anyway.
+            //
+            // `customer` because this is the public registration path. Staff
+            // are promoted afterwards; there is no self-service route to
+            // authority, which is the point.
+            await db.insert(memberships).values({
+              tenant_id: tenantId,
+              user_id: created.id,
+              role: 'customer',
+            });
+          } catch (error) {
+            // Same reasoning as above: the user row is already committed.
+            logger.error('[auth] failed to grant membership on sign-up', {
+              userId: created.id,
+              tenantId,
+              error: error.message,
+            });
+          }
+        },
+      },
+    },
+  },
 });
