@@ -59,6 +59,20 @@ export const tenantStatusEnum = pgEnum('tenant_status', [
   'suspended',
 ]);
 
+// Who a person is AT one operator. Deliberately not the same vocabulary as
+// `user.role`, which is a single global string on the Better Auth row and
+// answers a different question -- see membership.model.js.
+//
+// `customer` is a role rather than an absence of one. Someone who books a trip
+// belongs to the operator whose site they booked on, and that has to be a row
+// somewhere or their tenant is unknowable from their session alone.
+export const membershipRoleEnum = pgEnum('membership_role', [
+  'owner',
+  'admin',
+  'staff',
+  'customer',
+]);
+
 // ============= MONEY LAYER =============
 // These enums belong to the portable money module. They are deliberately
 // domain-neutral — no "lodge", no "booking", no "tour" — so the same tables

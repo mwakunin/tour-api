@@ -22,6 +22,10 @@ export * from './file.model.js';
 // Tenancy primitive
 export * from './tenant.model.js';
 
+// Which users may act at which tenant. The link the schema was missing --
+// without it a session and a hostname are two unreconciled claims.
+export * from './membership.model.js';
+
 // The portable money layer: counterparties, obligations, settlements,
 // allocations, fx rates, ledger. See money.model.js for why it uses
 // domain-neutral names.
