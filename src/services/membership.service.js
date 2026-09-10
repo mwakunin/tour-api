@@ -69,9 +69,7 @@ export const grantMembership = async ({ user_id, role }) => {
     tx
       .select({ id: memberships.id, is_active: memberships.is_active })
       .from(memberships)
-      .where(
-        and(eq(memberships.user_id, user_id), eq(memberships.role, role))
-      )
+      .where(and(eq(memberships.user_id, user_id), eq(memberships.role, role)))
       .limit(1)
   );
 
