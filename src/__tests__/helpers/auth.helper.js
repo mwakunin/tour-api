@@ -13,6 +13,21 @@ import { eq } from 'drizzle-orm';
 const TEST_PASSWORD = 'TestPassword123!';
 
 /**
+ * Attaches a user to the seeded operator.
+ *
+ * Authority and even visibility now come from `memberships`, not from
+ * `user.role`. With TENANT_HOST_SUFFIX unset -- every deployment and every
+ * test -- resolveTenant returns the seeded tenant, so that is where a test
+ * user has to be a member for an admin to be able to act on them at all.
+ */
+export const grantSeedMembership = async (userId, role) => {
+  await db
+    .insert(memberships)
+    .values({ tenant_id: SEED_TENANT_ID, user_id: userId, role })
+    .onConflictDoNothing();
+};
+
+/**
  * Create a real user via Better Auth's sign-up endpoint, using a fresh
  * supertest agent so the session cookie is captured automatically.
  * Returns { agent, user, email } — the agent is already authenticated.
@@ -34,6 +49,12 @@ export const createAuthenticatedAgent = async (app, redis, opts = {}) => {
   }
 
   const newUser = response.body.user;
+
+  // Every user in this deployment is one of the seeded operator's users --
+  // true of everyone the 0029 backfill covered, and true of every sign-up once
+  // the databaseHooks entry lands. The helper models that, rather than the
+  // transient gap where sign-up creates no membership.
+  await grantSeedMembership(newUser.id, 'customer');
 
   return { agent, user: newUser, sessionId: newUser.id, email };
 };
@@ -68,14 +89,7 @@ export const createAuthenticatedAdminAgent = async (app) => {
   // The grant that actually matters. Seeded tenant, because that is what
   // resolveTenant returns with TENANT_HOST_SUFFIX unset -- which is every
   // deployment and every test today.
-  await db
-    .insert(memberships)
-    .values({
-      tenant_id: SEED_TENANT_ID,
-      user_id: admin.id,
-      role: 'admin',
-    })
-    .onConflictDoNothing();
+  await grantSeedMembership(admin.id, 'admin');
 
   // Re-sign-in so the session reflects the updated role
   await agent
@@ -102,6 +116,10 @@ export const createMockUser = async () => {
       role: 'user',
     })
     .returning();
+
+  // A mock user stands for one of this operator's users. Without a membership
+  // an admin acting on them gets 404, because they would belong to nobody.
+  await grantSeedMembership(newUser.id, 'customer');
 
   return newUser;
 };

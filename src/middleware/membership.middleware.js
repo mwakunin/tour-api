@@ -70,6 +70,39 @@ export const loadMembership = async (userId) => {
 };
 
 /**
+ * Whether `userId` is known to the ambient tenant at all.
+ *
+ * The `user` table is Better Auth's: no tenant_id, no RLS, one global pool. So
+ * a handler that looks a user up by id reaches every operator's users, and an
+ * admin acting on `/users/:id` would otherwise be able to modify or delete
+ * someone who belongs entirely to a different operator. Membership is the only
+ * thing that says whose user this is.
+ *
+ * Deliberately NOT filtered on is_active. The question here is "is this person
+ * one of ours", and someone whose access was revoked still is -- filtering
+ * them out would make deactivating a member the one thing that put them beyond
+ * an administrator's reach, which is backwards. `is_active` governs what they
+ * may do, not what may be done to them.
+ *
+ * Reads through withTenantDb, so the RLS policy scopes the rows to the current
+ * tenant. There is no tenant_id in the WHERE clause because the policy is what
+ * makes this correct, not a filter somebody has to remember to write.
+ */
+export const isTenantMember = async (userId) => {
+  if (!currentTenantId() || !userId) return false;
+
+  const rows = await withTenantDb((tx) =>
+    tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(eq(memberships.user_id, userId))
+      .limit(1)
+  );
+
+  return rows.length > 0;
+};
+
+/**
  * Attaches `req.membership`, or leaves it null.
  *
  * Never fails the request. A membership lookup that throws is a database

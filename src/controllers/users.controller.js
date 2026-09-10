@@ -12,6 +12,7 @@ import {
 } from '#validations/users.validation.js';
 import { formatValidationError } from '#utils/format.js';
 import { isTenantAdmin } from '#middleware/auth.middleware.js';
+import { isTenantMember } from '#middleware/membership.middleware.js';
 
 // Log lines are newline-delimited, so an id carrying CR/LF can forge extra
 // entries. These are logged before validation runs, so they are sanitised here.
@@ -139,6 +140,23 @@ export const updateUserById = async (req, res, next) => {
       delete updates.role;
     }
 
+    // The actor is authorized; the TARGET still has to be this operator's to
+    // touch. `user` is Better Auth's table -- global, no tenant_id, no RLS --
+    // so updateUser(id) reaches every operator's users, and an admin here
+    // could otherwise edit someone who belongs entirely to another operator.
+    //
+    // Only when acting on somebody else: a person updating their own profile
+    // is always entitled to, and a fresh sign-up holds no membership yet, so
+    // requiring one here would lock new users out of their own account.
+    if (req.user.id !== id && !(await isTenantMember(id))) {
+      // 404, not 403, and byte-for-byte the same body this handler already
+      // returns for an id that exists nowhere. A 403 -- or a differently
+      // worded 404 -- would confirm the id names a real account, which is
+      // exactly what an administrator at another operator must not be able to
+      // probe for. Indistinguishable is the point.
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     const updatedUser = await updateUser(id, updates);
 
     logger.info(`User ${updatedUser.id} updated successfully`);
@@ -202,6 +220,13 @@ export const deleteUserById = async (req, res, next) => {
         error: 'Access denied',
         message: 'You can only delete your own account',
       });
+    }
+
+    // Same boundary as the update path, and it matters more here: deleteUser
+    // removes the global Better Auth row, so an unscoped delete would destroy
+    // an account belonging to another operator entirely.
+    if (!isOwnAccount && !(await isTenantMember(id))) {
+      return res.status(404).json({ error: 'User not found' });
     }
 
     const deletedUser = await deleteUser(id);

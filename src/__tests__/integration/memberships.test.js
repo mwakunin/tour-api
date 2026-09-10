@@ -7,8 +7,10 @@ import { db } from '#config/database.js';
 import { runWithTenant, withTenantDb } from '#config/tenantContext.js';
 import { tenants, memberships, user } from '#models/schema.js';
 import { loadMembership } from '#middleware/membership.middleware.js';
+import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import {
   createAuthenticatedAdminAgent,
+  createAuthenticatedAgent,
   deleteTestUser,
   cleanupTestSession,
 } from '../helpers/auth.helper.js';
@@ -187,6 +189,68 @@ describe('authorization comes from the membership, over HTTP', () => {
     await deleteTestUser(testAdmin.id);
     await cleanupTestSession(redis, adminSessionId);
     await redis.quit();
+  });
+
+  it("will not let an admin mutate a user who is not this operator's", async () => {
+    // The `user` table is Better Auth's: global, no tenant_id, no RLS. So
+    // updateUser(id) and deleteUser(id) reach every operator's users, and the
+    // actor check alone -- "are you an admin here" -- says nothing about
+    // whether the TARGET belongs here.
+    const [outsider] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `outsider-${Date.now()}@example.com`,
+        name: 'Belongs To Another Operator',
+        role: 'user',
+      })
+      .returning();
+
+    // No membership anywhere near the seeded tenant this admin administers.
+    await adminAgent
+      .put(`/api/users/${outsider.id}`)
+      .send({ name: 'Renamed by a stranger' })
+      .expect(404);
+
+    await adminAgent.delete(`/api/users/${outsider.id}`).expect(404);
+
+    // 404 rather than 403 on purpose: a 403 would confirm the id names a real
+    // account, which is what an admin at another operator must not be able to
+    // probe for. And the row must still be there.
+    const [stillThere] = await db
+      .select()
+      .from(user)
+      .where(eq(user.id, outsider.id));
+
+    expect(stillThere).toBeDefined();
+    expect(stillThere.name).toBe('Belongs To Another Operator');
+
+    await db.delete(user).where(eq(user.id, outsider.id));
+  });
+
+  it('lets a user with no membership still update their own profile', async () => {
+    // Self-service is exempt from the membership check, and the exemption is
+    // load-bearing: sign-up creates no membership today, so requiring one here
+    // would lock every new user out of their own account.
+    //
+    // The membership is removed explicitly rather than relying on the helper
+    // not to create one -- the helper deliberately grants one, because that is
+    // what production looks like, so the odd case has to be built on purpose.
+    const { agent, user: fresh } = await createAuthenticatedAgent(app, redis);
+
+    await db.delete(memberships).where(eq(memberships.user_id, fresh.id));
+
+    const held = await runWithTenant(SEED_TENANT_ID, () =>
+      loadMembership(fresh.id)
+    );
+    expect(held.roles).toEqual([]);
+
+    await agent
+      .put(`/api/users/${fresh.id}`)
+      .send({ name: 'Renamed Myself' })
+      .expect(200);
+
+    await deleteTestUser(fresh.id);
   });
 
   it('revoking the membership revokes admin, without touching the session', async () => {
