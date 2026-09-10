@@ -101,7 +101,25 @@ app.use(cors(corsOptions));
 
 app.use(helmet());
 
-// Add BEFORE all other routes, right after cors/helmet
+// Add BEFORE all other routes, right after cors/helmet.
+//
+// resolveTenant now runs FIRST, so sign-up and sign-in happen inside a tenant
+// context. That is what lets a registration create a membership: the tenant a
+// person is registering WITH is knowable only from the request that registers
+// them, and by the time any later middleware runs the sign-up has already
+// committed.
+//
+// This was previously mounted after these routes, on the reasoning that an
+// unauthenticated probe should not need a tenant. That reasoning does not
+// survive multi-tenancy -- signing in at a hostname that names no operator is
+// not a request anyone can answer, and answering it against the seeded tenant
+// would attach the wrong operator to the session. With TENANT_HOST_SUFFIX
+// unset, which is every deployment today, every host still resolves to the
+// seeded tenant and nothing changes.
+//
+// Health checks stay outside it: they are mounted on '/' further down and are
+// deliberately answerable without a tenant.
+app.use('/api/auth', resolveTenant);
 app.use('/api/auth', authRoutes);
 app.all('/api/auth/*path', toNodeHandler(auth));
 
@@ -150,9 +168,11 @@ app.use('/', healthRoutes); // Registers /health and /api/health
 
 // All other routes handle security individually
 
-// Every API route runs inside a tenant context. Mounted after health and auth
-// so an unauthenticated probe does not need a tenant, and before the routes so
-// that any withTenantDb call beneath them resolves.
+// Every API route runs inside a tenant context. Mounted after health so an
+// unauthenticated probe does not need a tenant, and before the routes so that
+// any withTenantDb call beneath them resolves.
+//
+// /api/auth resolves separately above, because it is mounted earlier.
 app.use('/api', resolveTenant);
 
 app.use('/api/users', usersRoutes);

@@ -1,7 +1,6 @@
 import express from 'express';
 import { getCurrentUser, forceLogout } from '#controllers/auth.controller.js';
 import { requireAuth, requireAdmin } from '#middleware/auth.middleware.js';
-import { resolveTenant } from '#middleware/tenant.middleware.js';
 import {
   authSecurityMiddleware,
   publicSecurityMiddleware,
@@ -18,18 +17,13 @@ router.get('/me', publicSecurityMiddleware, requireAuth, getCurrentUser);
 // Admin only
 // Same ordering: unauthenticated callers were rejected before Arcjet saw them.
 //
-// resolveTenant is listed explicitly because this router is mounted on
-// /api/auth in app.js, which is BEFORE the app-wide `app.use('/api',
-// resolveTenant)` -- deliberately, so an unauthenticated probe does not need a
-// tenant. requireAdmin now reads req.membership, and a membership can only be
-// loaded inside a tenant context, so without this the route would answer 403
-// to a genuine operator admin and the log would say "no membership context".
-// It has to run before requireAuth, since requireAuth is what populates the
-// membership.
+// resolveTenant used to be listed here explicitly, because this router mounted
+// ahead of the app-wide tenant middleware and requireAdmin needs a membership,
+// which needs a tenant. app.js now resolves the tenant for all of /api/auth,
+// so the local copy is gone -- one place decides, rather than two.
 router.post(
   '/force-logout/:userId',
   authSecurityMiddleware,
-  resolveTenant,
   requireAuth,
   requireAdmin,
   forceLogout
