@@ -5,7 +5,7 @@ import app from '../../app.js';
 import redis from '#config/redis.js';
 import { db } from '#config/database.js';
 import { runWithTenant, withTenantDb } from '#config/tenantContext.js';
-import { tenants, memberships, user } from '#models/schema.js';
+import { tenants, memberships, user, session } from '#models/schema.js';
 import { loadMembership } from '#middleware/membership.middleware.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import {
@@ -251,6 +251,57 @@ describe('authorization comes from the membership, over HTTP', () => {
       .expect(200);
 
     await deleteTestUser(fresh.id);
+  });
+
+  it("will not force-logout a user who is not this operator's", async () => {
+    // forceLogout takes :userId straight from the path and hands it to
+    // revokeUserSessions, which indexes Better Auth's global user table. An
+    // admin at one operator could otherwise log out another operator's users
+    // at will -- denial of service across a tenancy boundary.
+    const [outsider] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `logout-outsider-${Date.now()}@example.com`,
+        name: 'Not Ours',
+        role: 'user',
+      })
+      .returning();
+
+    await adminAgent
+      .post(`/api/auth/force-logout/${outsider.id}`)
+      .expect(404);
+
+    await db.delete(user).where(eq(user.id, outsider.id));
+  });
+
+  it("force-logs-out a user who is this operator's member", async () => {
+    // This path answered 500 to every request it ever received --
+    // auth.api.revokeUserSessions ships with better-auth's admin plugin and no
+    // plugins are configured. There was no test, so the endpoint was dead and
+    // looked fine. Asserting the rows actually go is the point; a 200 alone
+    // would have passed against a handler that did nothing.
+    const { agent, user: member } = await createAuthenticatedAgent(app, redis);
+
+    const before = await db
+      .select({ id: session.id })
+      .from(session)
+      .where(eq(session.userId, member.id));
+    expect(before.length).toBeGreaterThan(0);
+
+    await adminAgent.post(`/api/auth/force-logout/${member.id}`).expect(200);
+
+    const after = await db
+      .select({ id: session.id })
+      .from(session)
+      .where(eq(session.userId, member.id));
+    expect(after).toHaveLength(0);
+
+    // And the session is genuinely dead, not merely deleted from a table
+    // nothing reads.
+    await agent.get('/api/users/me').expect(401);
+
+    await deleteTestUser(member.id);
   });
 
   it('revoking the membership revokes admin, without touching the session', async () => {
