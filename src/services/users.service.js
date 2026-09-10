@@ -1,27 +1,33 @@
 import logger from '#config/logger.js';
-// Better Auth's `user` table is global — no tenant_id, no policy, nothing to
-// leak by operator, and a person may work for two of them. It still goes
-// through the RLS-constrained connection: the policied tables stay policied
-// here, so this is not a back door, just the right pool.
+// Better Auth's `user` table is global -- no tenant_id, no policy, and a person
+// may work for two operators.
+//
+// This note used to end "nothing to leak by operator". That was wrong, and the
+// reads below were the proof: listing the table unscoped handed one operator
+// every other operator's customers by name and email. What confines a read is
+// the join to `memberships`, which IS policied -- so the listing goes through
+// withTenantDb and lets the policy do the filtering.
 import { appDb } from '#config/appDatabase.js';
+import { withTenantDb } from '#config/tenantContext.js';
 import { user } from '#models/user.model.js';
+import { memberships } from '#models/membership.model.js';
 import { and, eq, or, ilike } from 'drizzle-orm';
 
+/**
+ * The people who belong to THIS operator.
+ *
+ * The inner join is the boundary, not a convenience. `user` is global;
+ * `memberships` is policied. Joining through withTenantDb means the policy
+ * filters the membership rows before the join happens, so a person who works
+ * only for another operator has no row to join to and cannot appear -- they
+ * are not excluded by a WHERE clause somebody has to remember to write.
+ *
+ * selectDistinct because one person may hold several roles here, and they are
+ * one entry in a list of users rather than three.
+ */
 export const getAllUsers = async (filters = {}) => {
   try {
     const { search, role, limit = 100, offset = 0 } = filters;
-
-    // Start building the query
-    let query = appDb
-      .select({
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-      })
-      .from(user);
 
     // Collected and applied once: a second .where() REPLACES the first in
     // Drizzle rather than adding to it, so searching and filtering by role
@@ -39,14 +45,26 @@ export const getAllUsers = async (filters = {}) => {
       conditions.push(eq(user.role, role));
     }
 
-    if (conditions.length > 0) {
-      query = query.where(and(...conditions));
-    }
+    const result = await withTenantDb((tx) => {
+      const query = tx
+        .selectDistinct({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+        })
+        .from(user)
+        .innerJoin(memberships, eq(memberships.user_id, user.id));
 
-    // Apply pagination
-    query = query.limit(limit).offset(offset);
-
-    const result = await query;
+      return conditions.length > 0
+        ? query
+            .where(and(...conditions))
+            .limit(limit)
+            .offset(offset)
+        : query.limit(limit).offset(offset);
+    });
 
     // No `search` here: it is user-supplied and routinely an email address.
     logger.info(`Found ${result.length} users`, { role, limit, offset });
@@ -153,25 +171,49 @@ export const deleteUser = async (id) => {
 
 // Add this function to the end of src/services/users.service.js
 
+/**
+ * Headcount for THIS operator, counted from memberships.
+ *
+ * It used to select the whole `user` table and tally `user.role`, which gave
+ * every operator the same number: the size of the deployment. It also counted
+ * a column that no longer decides anything -- authority moved to memberships,
+ * so 'admins' meant "rows with a legacy string set" rather than "people who
+ * can administer this operator".
+ *
+ * Distinct users, not membership rows: somebody who is both staff and a
+ * customer here is one person, and would otherwise be counted twice in the
+ * total and once in each bucket.
+ */
 export const getUserStats = async () => {
   try {
-    logger.info('Getting user statistics...');
+    const rows = await withTenantDb((tx) =>
+      tx
+        .select({
+          user_id: memberships.user_id,
+          role: memberships.role,
+        })
+        .from(memberships)
+        .where(eq(memberships.is_active, true))
+    );
 
-    const allUsers = await appDb.select().from(user);
+    const everyone = new Set(rows.map((row) => row.user_id));
+    const adminIds = new Set(
+      rows
+        .filter((row) => row.role === 'owner' || row.role === 'admin')
+        .map((row) => row.user_id)
+    );
 
-    const total = allUsers.length;
-    const admins = allUsers.filter((u) => u.role === 'admin').length;
-    const regular = allUsers.filter((u) => u.role === 'user').length;
+    const total = everyone.size;
+    const admins = adminIds.size;
+    // Everyone who is not an administrator here. Named `regular` because the
+    // response shape is part of the admin dashboard's contract.
+    const regular = total - admins;
 
     logger.info(
       `User stats: Total=${total}, Admins=${admins}, Regular=${regular}`
     );
 
-    return {
-      total,
-      admins,
-      regular,
-    };
+    return { total, admins, regular };
   } catch (error) {
     logger.error('Error getting user stats:', error);
     throw error;

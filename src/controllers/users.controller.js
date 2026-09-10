@@ -68,6 +68,22 @@ export const fetchUserById = async (req, res, next) => {
     }
 
     const { id } = validationResult.data;
+
+    // Any signed-in caller could read any profile in the deployment, email and
+    // role included. That was a deliberate single-tenant decision -- the route
+    // comment says so -- and it stops being defensible the moment there is a
+    // second operator, because "any signed-in caller" then includes their
+    // competitors' staff.
+    //
+    // Self is always allowed: a person may read their own profile whether or
+    // not they hold a membership anywhere.
+    if (req.user?.id !== id && !(await isTenantMember(id))) {
+      // The same body this handler returns for an id that exists nowhere, so a
+      // caller cannot tell "not here" from "nowhere" -- see the matching
+      // reasoning on the update and delete paths.
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     const user = await getUserById(id);
 
     logger.info(`User ${user.id} retrieved successfully`);

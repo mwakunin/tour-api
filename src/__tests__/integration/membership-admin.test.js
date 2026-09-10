@@ -4,7 +4,7 @@ import { eq, and } from 'drizzle-orm';
 import app from '../../app.js';
 import redis from '#config/redis.js';
 import { db } from '#config/database.js';
-import { memberships } from '#models/schema.js';
+import { memberships, user } from '#models/schema.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import {
   createAuthenticatedAdminAgent,
@@ -158,6 +158,66 @@ describe('membership administration', () => {
           .set({ is_active: true })
           .where(eq(memberships.id, row.id));
       }
+    }
+  });
+
+  it('keeps another operator’s people out of the user list and lookup', async () => {
+    // A user row with no membership at this operator stands in for somebody
+    // who works only for another one -- the `user` table is global, so the
+    // only thing that ever distinguished them was the join.
+    const [outsider] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `outsider-list-${Date.now()}@example.com`,
+        name: 'Another Operator Staff',
+        role: 'user',
+      })
+      .returning();
+
+    try {
+      const list = await adminAgent.get('/api/users?limit=200').expect(200);
+      const ids = list.body.users.map((row) => row.id);
+
+      // Not merely absent from this page -- absent because the join has
+      // nothing to join to.
+      expect(ids).not.toContain(outsider.id);
+      expect(ids).toContain(testAdmin.id);
+
+      // And not reachable by id either. Same body as an id that exists
+      // nowhere, so the two cannot be told apart.
+      const direct = await adminAgent
+        .get(`/api/users/${outsider.id}`)
+        .expect(404);
+      expect(direct.body.error).toBe('User not found');
+    } finally {
+      await db.delete(user).where(eq(user.id, outsider.id));
+    }
+  });
+
+  it('counts only this operator’s people in the stats', async () => {
+    const before = await adminAgent.get('/api/users/stats').expect(200);
+
+    const [outsider] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `outsider-stats-${Date.now()}@example.com`,
+        name: 'Not Counted',
+        role: 'admin',
+      })
+      .returning();
+
+    try {
+      const after = await adminAgent.get('/api/users/stats').expect(200);
+
+      // role: 'admin' on the global row and no membership here. The old
+      // implementation tallied that column across the whole deployment, so
+      // this would have moved both numbers.
+      expect(after.body.data.total).toBe(before.body.data.total);
+      expect(after.body.data.admins).toBe(before.body.data.admins);
+    } finally {
+      await db.delete(user).where(eq(user.id, outsider.id));
     }
   });
 
