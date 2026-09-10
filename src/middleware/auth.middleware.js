@@ -1,6 +1,7 @@
 import { auth } from '#utils/auth.js';
 import { fromNodeHeaders } from 'better-auth/node';
 import logger from '#config/logger.js';
+import { attachMembership } from '#middleware/membership.middleware.js';
 
 export const requireAuth = async (req, res, next) => {
   try {
@@ -21,6 +22,12 @@ export const requireAuth = async (req, res, next) => {
 
     req.user = session.user;
     req.session = session.session;
+
+    // Who they are AT this tenant, alongside who they are. Additive for now --
+    // requireRole below still reads req.user.role, so this decides nothing
+    // yet. It never throws; see attachMembership.
+    await attachMembership(req);
+
     next();
   } catch (error) {
     logger.error('[Auth] Authentication failed:', error.message);
@@ -39,6 +46,7 @@ export const optionalAuth = async (req, res, next) => {
     if (session) {
       req.user = session.user;
       req.session = session.session;
+      await attachMembership(req);
     }
     next();
   } catch (error) {
