@@ -23,6 +23,7 @@ import healthRoutes from '#routes/health.routes.js';
 import blogRoutes from '#routes/blog.routes.js';
 import chatRoutes from '#routes/chat.routes.js';
 import counterpartyRoutes from '#routes/counterparty.routes.js';
+import membershipRoutes from '#routes/membership.routes.js';
 import fxRateRoutes from '#routes/fxRate.routes.js';
 import supplierInvoiceRoutes from '#routes/supplierInvoice.routes.js';
 import settlementRoutes from '#routes/settlement.routes.js';
@@ -190,6 +191,10 @@ app.use('/api/payments', paymentRoutes);
 // The cost side: suppliers, agents and the rest of the money layer's
 // counterparties. Mounted after resolveTenant like every other /api route.
 app.use('/api/counterparties', counterpartyRoutes);
+// Who works for this operator. What the 409 on DELETE /users/:id points at:
+// removing somebody from your operator is a membership operation, because the
+// account may be shared with another operator and is not yours to delete.
+app.use('/api/memberships', membershipRoutes);
 app.use('/api/fx-rates', fxRateRoutes);
 app.use('/api/supplier-invoices', supplierInvoiceRoutes);
 app.use('/api/settlements', settlementRoutes);
