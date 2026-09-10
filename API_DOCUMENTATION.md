@@ -165,7 +165,7 @@ FA-[YEAR]-[SEQUENCE]
 
 ### Payments
 
-Multi-gateway payment processing with M-Pesa, Paystack, and Flutterwave.
+Multi-gateway payment processing with Pesapal, M-Pesa, and bank transfer.
 
 **Key Endpoints:**
 
@@ -176,10 +176,15 @@ Multi-gateway payment processing with M-Pesa, Paystack, and Flutterwave.
 
 **Supported Payment Methods:**
 
+- **Pesapal**: Cards and mobile money (KES, USD, TZS, UGX) — the default
 - **M-Pesa**: Mobile money (KES only)
-- **Paystack**: Card payments (KES, USD)
-- **Flutterwave**: Card payments (Multiple currencies)
 - **Bank Transfer**: Manual confirmation (Admin)
+
+Paystack is deprecated. `getAvailablePaymentMethods` filters it out, so it is
+never offered for a new payment; the webhook and verification paths stay
+mounted only so transactions created before the move to Pesapal can still be
+settled. Flutterwave was never implemented — it was listed here and carried as
+a dependency, but no code ever imported it.
 
 ## Data Models
 
