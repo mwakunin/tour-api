@@ -145,8 +145,19 @@ export const getBlogPostsQuerySchema = z.object({
 
   search: z.string().max(255).optional(),
 
+  // views_count is here because the client has been asking for it since it
+  // was written: getPopularPosts sends sort_by "views_count" and this enum
+  // rejected it, so "popular posts" answered 400 every time it was called.
+  // The column exists on blog_posts and blogPosts[sort_by] resolves it
+  // dynamically, so nothing else had to change — the enum was the whole gap.
   sort_by: z
-    .enum(['created_at', 'published_at', 'title', 'read_time_minutes'])
+    .enum([
+      'created_at',
+      'published_at',
+      'title',
+      'read_time_minutes',
+      'views_count',
+    ])
     .optional()
     .default('published_at'),
 

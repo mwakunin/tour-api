@@ -1,7 +1,7 @@
 // src/__tests__/integration/blog.test.js
 
 import request from 'supertest';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import app from '../../app.js';
 import { db, initDatabase } from '#config/database.js';
 import redis from '#config/redis.js';
@@ -74,6 +74,54 @@ describe('Blog API Integration Tests', () => {
   // PUBLIC: GET /api/blog/posts
   // ========================================
   describe('GET /api/blog/posts - List Published Posts', () => {
+    it('sorts by views_count, which the client has always asked for', async () => {
+      // getPopularPosts in the frontend sends sort_by "views_count". The enum
+      // rejected it, so every call answered 400 -- "popular posts" has never
+      // worked. The column was there the whole time.
+      const stamp = Date.now();
+      const [quiet] = await db
+        .insert(blogPosts)
+        .values({
+          tenant_id: SEED_TENANT_ID,
+          title: 'Barely read',
+          slug: `quiet-${stamp}`,
+          excerpt: 'x'.repeat(60),
+          content: 'x'.repeat(120),
+          status: 'published',
+          published_at: new Date(),
+          views_count: 3,
+        })
+        .returning();
+
+      const [popular] = await db
+        .insert(blogPosts)
+        .values({
+          tenant_id: SEED_TENANT_ID,
+          title: 'Widely read',
+          slug: `popular-${stamp}`,
+          excerpt: 'x'.repeat(60),
+          content: 'x'.repeat(120),
+          status: 'published',
+          published_at: new Date(),
+          views_count: 900,
+        })
+        .returning();
+
+      const response = await request(app)
+        .get('/api/blog/posts?sort_by=views_count&sort_order=desc&limit=50')
+        .expect(200);
+
+      const slugs = response.body.data.map((post) => post.slug);
+      expect(slugs).toContain(`popular-${stamp}`);
+      expect(slugs.indexOf(`popular-${stamp}`)).toBeLessThan(
+        slugs.indexOf(`quiet-${stamp}`)
+      );
+
+      await db
+        .delete(blogPosts)
+        .where(inArray(blogPosts.id, [quiet.id, popular.id]));
+    });
+
     // "should return only published posts"
     it('should return only published posts', async () => {
       const [published] = await db
