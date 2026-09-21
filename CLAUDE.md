@@ -72,10 +72,16 @@ school-saas, ported conceptually (that project is TypeScript/Hono, this is
 JavaScript/Express, so nothing copies verbatim).
 
 **The data model is tenant-aware; the tenancy product is not built.** There is
-no signup, no subdomain routing, no billing, no tenant switcher, and nothing
-user-facing says the word "tenant". Footloose runs as a single seeded row,
-`00000000-0000-0000-0000-000000000001`. The column exists now because
-retrofitting a discriminator across every table and query later is the
+no signup, no billing, no tenant switcher, and nothing user-facing says the
+word "tenant". Host-based routing and hand-provisioning DO exist:
+`resolveTenant` maps `<slug>.<TENANT_HOST_SUFFIX>` to the operator (failing
+closed with a 404 on unknown or suspended hosts), and
+`scripts/provision-tenant.js` creates a tenant plus its owner membership
+atomically for an operator who signed up on the main host. What is still
+missing — self-serve onboarding, billing, a switcher, an operator-facing
+settings surface — is laid out in `TENANCY-PRODUCT.md`. Footloose runs as the
+seeded row, `00000000-0000-0000-0000-000000000001`. The column exists now
+because retrofitting a discriminator across every table and query later is the
 expensive migration; the product surface can wait for operator #2.
 
 **`user`, `session`, `account` and `verification` are deliberately global.**
@@ -94,27 +100,27 @@ both selling a "7-day-mara-safari" is normal. The exception is
 `files.file_id`, which stays globally unique because it is an ImageKit id
 issued by an external system and is not ours to scope.
 
-**`tenant_id` has a DEFAULT, and that is a temporary crutch.** Migration 0007
-defaults it to the seed tenant so the existing handlers and the whole test
-suite keep working without being rewritten in the same change. It means a
-handler that forgets `tenant_id` silently writes to the seed tenant — exactly
-the failure RLS exists to prevent. **Drop the default in the same change that
-adds the `withTenant` middleware and RLS policies.**
+**`tenant_id` has no DEFAULT — an insert must name its tenant.** Migration
+0007 defaulted every tenant-scoped column to the seed tenant while handlers
+were being threaded through; migration 0011 dropped the defaults once every
+insert site set `currentTenantId()` explicitly. The crutch's failure mode —
+an INSERT that forgets `tenant_id` silently filing the row under Footloose —
+is now a 23502 not-null violation instead. `src/__tests__/integration/tenant-defaults.test.js`
+pins this; when adding a tenant-scoped table, create it WITHOUT a default and
+add the table to that test's list.
 
-**RLS covers the money-layer tables and `tenants`, and nothing else yet.**
-Migration 0008 enables and FORCEs row-level security on `counterparties`,
-`obligations`, `settlements`, `allocations`, `fx_rates`, `ledger_entries` and
-`tenants`, with both `USING` and `WITH CHECK` — without the latter a handler
-could insert a row attributed to another tenant and merely be unable to read it
-back, which is corruption rather than protection. With no tenant set,
+**RLS covers every tenant-scoped table.** Migration 0008 enabled and FORCEd
+row-level security on the money layer (`counterparties`, `obligations`,
+`settlements`, `allocations`, `fx_rates`, `ledger_entries`) and `tenants`;
+0010 added the operational tables (`tours`, `destinations`,
+`tour_destinations`, `bookings`, `payments`, `files`, `blog_categories`,
+`blog_posts`); 0028/0029 added `ledger_outbox` and `memberships`. Every
+policy carries both `USING` and `WITH CHECK` — without the latter a handler
+could insert a row attributed to another tenant and merely be unable to read
+it back, which is corruption rather than protection. With no tenant set,
 `public.current_tenant_id()` is NULL and every protected table returns zero
-rows; never everything.
-
-The legacy tables are deliberately still uncovered. Nothing queries the money
-layer yet, so enabling policies there has a blast radius of zero and proves the
-mechanism. `bookings`, `tours`, `payments` and the rest join the policy set in
-the change that moves their handlers onto `withTenantDb` and drops the
-`tenant_id` DEFAULT.
+rows; never everything. The only unpolicied tables are Better Auth's global
+`user`/`session`/`account`/`verification`, which have no tenant_id by design.
 
 **Failed accruals are filed, not just logged.** `bookingLedger` stays forgiving
 — a booking must not fail because its accrual did — but the failure now writes
