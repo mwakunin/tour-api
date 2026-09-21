@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  jest as jestGlobal,
+} from '@jest/globals';
+import request from 'supertest';
 import { eq, inArray } from 'drizzle-orm';
 
 import app from '../../app.js';
@@ -7,6 +15,7 @@ import { db } from '#config/database.js';
 import { runWithTenant, withTenantDb } from '#config/tenantContext.js';
 import { tenants, memberships, user, session } from '#models/schema.js';
 import { loadMembership } from '#middleware/membership.middleware.js';
+import { grantSignupMembership } from '#services/membership.service.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import {
   createAuthenticatedAdminAgent,
@@ -268,6 +277,171 @@ describe('authorization comes from the membership, over HTTP', () => {
     await deleteTestUser(fresh.id);
   });
 
+  it('gives every new sign-up a customer membership at the resolved tenant', async () => {
+    // Before the hook, registration produced a user belonging to nobody: the
+    // 0029 backfill covered everyone who already existed and every sign-up
+    // after it created another orphan.
+    const { user: fresh } = await createAuthenticatedAgent(app, redis);
+
+    const held = await runWithTenant(SEED_TENANT_ID, () =>
+      loadMembership(fresh.id)
+    );
+
+    expect(held.roles).toEqual(['customer']);
+
+    // customer, not admin or staff. Registration is the public booking path,
+    // so there must be no self-service route to authority.
+    expect(held.roles).not.toContain('admin');
+    expect(held.roles).not.toContain('owner');
+
+    await deleteTestUser(fresh.id);
+  });
+
+  it('absorbs a transient grant failure instead of undoing a recoverable sign-up', async () => {
+    // The other half of the retry's job: a blip that clears on its own must
+    // not be treated the same as a genuine failure. If retrying did nothing
+    // -- or if the code gave up after one attempt -- this would fail exactly
+    // like the case above, for the wrong reason.
+    const email = `absorbed-${Date.now()}@example.com`;
+    const originalInsert = db.insert.bind(db);
+    let attempts = 0;
+    const insertSpy = jestGlobal
+      .spyOn(db, 'insert')
+      .mockImplementation((table) => {
+        if (table === memberships) {
+          attempts += 1;
+          if (attempts < 2) {
+            throw new Error('simulated: transient, clears on retry');
+          }
+        }
+        return originalInsert(table);
+      });
+
+    let response;
+    try {
+      response = await request(app).post('/api/auth/sign-up/email').send({
+        email,
+        password: 'TestPassword123!',
+        name: 'Should Survive A Blip',
+      });
+    } finally {
+      insertSpy.mockRestore();
+    }
+
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(response.status).toBe(200);
+
+    const held = await runWithTenant(SEED_TENANT_ID, () =>
+      loadMembership(response.body.user.id)
+    );
+    expect(held.roles).toEqual(['customer']);
+
+    await deleteTestUser(response.body.user.id);
+  });
+
+  it('undoes the account when the sign-up membership grant cannot be saved', async () => {
+    // grantSignupMembership retries a few times and only gives up once the
+    // failure has repeated. It has no way to tell a transient blip from a
+    // real one except by trying again, so this forces EVERY attempt to fail
+    // -- the case the retries cannot paper over -- rather than just the
+    // first one, which a retry would simply absorb.
+    const email = `undone-${Date.now()}@example.com`;
+    const originalInsert = db.insert.bind(db);
+    const insertSpy = jestGlobal
+      .spyOn(db, 'insert')
+      .mockImplementation((table) => {
+        if (table === memberships) {
+          throw new Error('simulated: membership grant unavailable');
+        }
+        return originalInsert(table);
+      });
+
+    let response;
+    try {
+      response = await request(app).post('/api/auth/sign-up/email').send({
+        email,
+        password: 'TestPassword123!',
+        name: 'Should Not Persist',
+      });
+    } finally {
+      insertSpy.mockRestore();
+    }
+
+    // The failure is not swallowed into an apparently-successful sign-up.
+    // Before this fix it was: better-auth had already committed the user, the
+    // hook logged and returned, and the response looked exactly like success.
+    expect(response.status).toBeGreaterThanOrEqual(400);
+
+    // Compensated, not merely refused: the account this hook could not
+    // finish setting up must not be left behind, or the email is
+    // permanently unusable and nobody asked for that.
+    const [survivor] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(eq(user.email, email));
+    expect(survivor).toBeUndefined();
+
+    // The actual point of undoing it: the same email can sign up again and
+    // this time gets a real membership, because a committed orphan would
+    // otherwise block every future attempt with this address for good.
+    const retry = await request(app).post('/api/auth/sign-up/email').send({
+      email,
+      password: 'TestPassword123!',
+      name: 'Retried Successfully',
+    });
+
+    expect(retry.status).toBe(200);
+
+    const held = await runWithTenant(SEED_TENANT_ID, () =>
+      loadMembership(retry.body.user.id)
+    );
+    expect(held.roles).toEqual(['customer']);
+
+    await deleteTestUser(retry.body.user.id);
+  });
+
+  it('treats an already-granted membership as success, not a failure to undo', async () => {
+    // The retry loop's own hazard: the insert commits the instant the
+    // statement lands, so a connection lost AFTER that commit makes the
+    // caller see a failure for work that is already done. The retry then
+    // meets the row the earlier attempt created. Counting that unique
+    // violation as a failure used to burn every attempt and end in
+    // undoSignup -- deleting a user whose membership existed, i.e. destroying
+    // a finished sign-up over a blip that happened after the work. The
+    // conflict is the memory of a success, so the fix makes it resolve: the
+    // call below runs against a membership that is ALREADY in the table, and
+    // must come back clean with the account untouched.
+    const [pre] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `committed-${Date.now()}@example.com`,
+        name: 'Already Granted',
+        role: 'user',
+      })
+      .returning();
+
+    await db.insert(memberships).values({
+      tenant_id: SEED_TENANT_ID,
+      user_id: pre.id,
+      role: 'customer',
+    });
+
+    try {
+      await expect(
+        grantSignupMembership(pre.id, SEED_TENANT_ID)
+      ).resolves.toBeUndefined();
+
+      const [survivor] = await db
+        .select({ id: user.id })
+        .from(user)
+        .where(eq(user.id, pre.id));
+      expect(survivor).toBeDefined();
+    } finally {
+      await db.delete(user).where(eq(user.id, pre.id));
+    }
+  });
+
   it('will not mutate a user who also works for another operator', async () => {
     // Membership here is necessary but not sufficient. `user` is ONE global
     // row shared by every operator the person works for, so an update reaches
@@ -380,6 +554,107 @@ describe('authorization comes from the membership, over HTTP', () => {
     await agent.get('/api/users/me').expect(401);
 
     await deleteTestUser(member.id);
+  });
+
+  it('will not force-logout a member whose account is active at another operator', async () => {
+    // Sessions are one global set per account -- the schema has no per-tenant
+    // session to offer -- so force-logout ends the person's sessions
+    // EVERYWHERE. An active membership at another operator means that
+    // operator has a colleague mid-shift whose working session this endpoint
+    // would destroy; this admin's authority stops at their own operator, the
+    // same boundary the /users/:id 409 enforces for the shared user row.
+    const { user: member } = await createAuthenticatedAgent(app, redis);
+    const otherTenant = crypto.randomUUID();
+
+    try {
+      await db.insert(tenants).values({
+        id: otherTenant,
+        name: 'Logout Other Operator',
+        slug: `logout-shared-${Date.now()}`,
+        booking_ref_prefix: 'LS',
+      });
+      await db.insert(memberships).values({
+        tenant_id: otherTenant,
+        user_id: member.id,
+        role: 'staff',
+      });
+
+      await adminAgent.post(`/api/auth/force-logout/${member.id}`).expect(409);
+
+      // Refused, not silently degraded: the sessions -- including the ones
+      // the other operator depends on -- are all still standing.
+      const remaining = await db
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.userId, member.id));
+      expect(remaining.length).toBeGreaterThan(0);
+    } finally {
+      await db.delete(user).where(eq(user.id, member.id));
+      await db.delete(tenants).where(eq(tenants.id, otherTenant));
+    }
+  });
+
+  it('force-logs-out a member whose only other membership is revoked', async () => {
+    // The is_active filter on the shared-account guard is load-bearing, not
+    // decoration. An operator that already revoked this person has nothing
+    // running on them -- no working session of theirs is destroyed by acting
+    // here -- so the guard must not count it. Drop the filter and this test
+    // answers 409 instead of clearing the sessions it should clear.
+    const { user: member } = await createAuthenticatedAgent(app, redis);
+    const otherTenant = crypto.randomUUID();
+
+    try {
+      await db.insert(tenants).values({
+        id: otherTenant,
+        name: 'Former Other Operator',
+        slug: `logout-revoked-${Date.now()}`,
+        booking_ref_prefix: 'LR',
+      });
+      await db.insert(memberships).values({
+        tenant_id: otherTenant,
+        user_id: member.id,
+        role: 'staff',
+        is_active: false,
+      });
+
+      const before = await db
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.userId, member.id));
+      expect(before.length).toBeGreaterThan(0);
+
+      await adminAgent.post(`/api/auth/force-logout/${member.id}`).expect(200);
+
+      const after = await db
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.userId, member.id));
+      expect(after).toHaveLength(0);
+    } finally {
+      await db.delete(user).where(eq(user.id, member.id));
+      await db.delete(tenants).where(eq(tenants.id, otherTenant));
+    }
+  });
+
+  it('will not force-logout a member this operator has already revoked', async () => {
+    // The unscoped isTenantMember answered "were they ever ours", which is
+    // the right question for reaching a former member's ROW to manage it and
+    // the wrong one for acting on their sessions. A revoked member keeps
+    // nothing this endpoint could meaningfully end -- their session reaches
+    // no tenant route here -- so a former member is refused with the same
+    // body as an id that exists nowhere.
+    const { user: member } = await createAuthenticatedAgent(app, redis);
+
+    try {
+      await db
+        .update(memberships)
+        .set({ is_active: false })
+        .where(eq(memberships.user_id, member.id));
+
+      await adminAgent.post(`/api/auth/force-logout/${member.id}`).expect(404);
+    } finally {
+      await db.delete(user).where(eq(user.id, member.id));
+    }
   });
 
   it('revoking the membership revokes admin, without touching the session', async () => {

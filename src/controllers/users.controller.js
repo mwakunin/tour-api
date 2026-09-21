@@ -14,6 +14,7 @@ import { formatValidationError } from '#utils/format.js';
 import { isTenantAdmin } from '#middleware/auth.middleware.js';
 import {
   isTenantMember,
+  isActiveTenantMember,
   belongsToOtherTenants,
 } from '#middleware/membership.middleware.js';
 
@@ -68,6 +69,53 @@ export const fetchUserById = async (req, res, next) => {
     }
 
     const { id } = validationResult.data;
+
+    // THE CALLER's standing, before the target's. The route is reachable by
+    // any signed-in account, and loadMembership never fails a request -- it
+    // attaches roles: [] for an account with no active membership here,
+    // which includes this operator's own former members. A caller passing
+    // only the target check below could read the current directory of people
+    // they left (or never worked with) -- the same disclosure the target-side
+    // active check exists to prevent, arriving from the other direction.
+    // Reading others requires being one of us; reading yourself requires
+    // nothing, which is what keeps a stripped account able to see its own
+    // profile.
+    if (req.user?.id !== id && !(req.membership?.roles?.length > 0)) {
+      logger.warn(
+        '[Users] Lookup refused: caller holds no active membership here',
+        {
+          callerId: req.user?.id,
+          targetId: id,
+        }
+      );
+      return res.status(403).json({
+        error: 'Access denied',
+        message:
+          'Reading other people requires an active membership at this operator.',
+      });
+    }
+
+    // Any signed-in caller could read any profile in the deployment, email and
+    // role included. That was a deliberate single-tenant decision -- the route
+    // comment says so -- and it stops being defensible the moment there is a
+    // second operator, because "any signed-in caller" then includes their
+    // competitors' staff.
+    //
+    // isActiveTenantMember, not isTenantMember: this is a read, and a
+    // revoked member showing up in a lookup as if they still belonged here is
+    // the disclosure isTenantMember's own doc comment says it will not
+    // protect against -- it answers "were they ever ours", which is right for
+    // update/delete and wrong for who this operator can currently see.
+    //
+    // Self is always allowed: a person may read their own profile whether or
+    // not they hold a membership anywhere.
+    if (req.user?.id !== id && !(await isActiveTenantMember(id))) {
+      // The same body this handler returns for an id that exists nowhere, so a
+      // caller cannot tell "not here" from "nowhere" -- see the matching
+      // reasoning on the update and delete paths.
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     const user = await getUserById(id);
 
     logger.info(`User ${user.id} retrieved successfully`);

@@ -50,11 +50,10 @@ export const createAuthenticatedAgent = async (app, redis, opts = {}) => {
 
   const newUser = response.body.user;
 
-  // Every user in this deployment is one of the seeded operator's users --
-  // true of everyone the 0029 backfill covered, and true of every sign-up once
-  // the databaseHooks entry lands. The helper models that, rather than the
-  // transient gap where sign-up creates no membership.
-  await grantSeedMembership(newUser.id, 'customer');
+  // No grant here any more. The databaseHooks entry in utils/auth.js creates
+  // the customer membership as part of the sign-up itself, so the helper
+  // exercises the real path instead of simulating it -- which also means these
+  // tests would notice if that hook ever stopped firing.
 
   return { agent, user: newUser, sessionId: newUser.id, email };
 };

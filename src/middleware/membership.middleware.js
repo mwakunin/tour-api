@@ -104,6 +104,38 @@ export const isTenantMember = async (userId) => {
 };
 
 /**
+ * Whether `userId` is a member of the ambient tenant RIGHT NOW.
+ *
+ * The is_active-blind sibling above is deliberate for mutation guards: an
+ * administrator must still be able to reach a revoked member's row to update
+ * or delete it, because is_active governs what THEY may do, not what may be
+ * done to them. Reading is different. Listing or looking up a former
+ * member's profile as if they still belonged here is a disclosure the
+ * mutation guards do not have -- an admin screen showing somebody who left is
+ * a directory that is wrong, not a permission that is generous.
+ *
+ * So this exists for exactly one thing: deciding whether a READ may see
+ * someone other than the caller. It must never be used to gate update or
+ * delete, which need the unscoped isTenantMember above to keep working on
+ * exactly the people it should.
+ */
+export const isActiveTenantMember = async (userId) => {
+  if (!currentTenantId() || !userId) return false;
+
+  const rows = await withTenantDb((tx) =>
+    tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(
+        and(eq(memberships.user_id, userId), eq(memberships.is_active, true))
+      )
+      .limit(1)
+  );
+
+  return rows.length > 0;
+};
+
+/**
  * Whether `userId` also belongs to some operator OTHER than the ambient one.
  *
  * `user` is one global row shared by every operator the person works for, so a
@@ -140,6 +172,45 @@ export const belongsToOtherTenants = async (userId) => {
     .from(memberships)
     .where(
       and(eq(memberships.user_id, userId), ne(memberships.tenant_id, tenantId))
+    )
+    .limit(1);
+
+  return rows.length > 0;
+};
+
+/**
+ * Whether `userId` is an ACTIVE member of some operator other than the
+ * ambient one.
+ *
+ * Looks like a filter-away of belongsToOtherTenants, and the difference is
+ * the whole point. That one guards mutations of the shared `user` row, where
+ * even a revoked membership elsewhere means the row is still somebody else's
+ * history -- and its doc comment explains why ANY membership must count. This
+ * one guards acts whose blast radius is the person's SESSIONS, which are one
+ * global set shared by every operator they work for. A membership another
+ * operator has already revoked means that operator has nothing running on
+ * this person: no working session of theirs is destroyed by acting here. Only
+ * an active one is a colleague mid-shift somewhere else, whose session is not
+ * ours to end.
+ *
+ * Same owner connection, same fail-closed default, for the same reasons
+ * belongsToOtherTenants gives above: RLS makes the question unanswerable from
+ * the tenant connection, and an unanswerable safety question is not a yes.
+ */
+export const activeAtOtherTenants = async (userId) => {
+  const tenantId = currentTenantId();
+
+  if (!tenantId || !userId) return true;
+
+  const rows = await db
+    .select({ tenant_id: memberships.tenant_id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.user_id, userId),
+        eq(memberships.is_active, true),
+        ne(memberships.tenant_id, tenantId)
+      )
     )
     .limit(1);
 

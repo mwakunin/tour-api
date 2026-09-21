@@ -6,6 +6,7 @@
 // data, under a hostname that looks right. So these tests go through the HTTP
 // surface with real Host headers rather than calling the middleware directly.
 
+import request from 'supertest';
 import { eq, inArray } from 'drizzle-orm';
 
 import app from '../../app.js';
@@ -238,6 +239,27 @@ describe('tenant resolution', () => {
       expect(
         seeded.body.data.some((row) => row.name === 'Alpha-only lodge')
       ).toBe(false);
+    });
+
+    it('resolves the tenant for /api/auth, so sign-up knows who it is for', async () => {
+      // The tenant a person registers WITH is knowable only from the request
+      // that registers them, so /api/auth has to resolve before better-auth
+      // handles it -- otherwise a sign-up hook has no tenant to attach a
+      // membership to. This asserts the middleware is actually in front of it:
+      // an unresolvable host is refused rather than quietly served by the
+      // seeded operator.
+      //
+      // /api/auth used to sit ahead of tenant resolution entirely, so this
+      // request would have reached better-auth and created an account.
+      await request(app)
+        .post('/api/auth/sign-up/email')
+        .set('Host', `no-such-operator.${SUFFIX}`)
+        .send({
+          email: `orphan-${Date.now()}@example.com`,
+          password: 'TestPassword123!',
+          name: 'Orphan',
+        })
+        .expect(404);
     });
 
     it('404s an unknown operator instead of falling back to the seeded one', async () => {

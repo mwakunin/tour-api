@@ -1,0 +1,49 @@
+# deploy/Caddyfile.wildcard
+#
+# TLS for per-operator hostnames. Use INSTEAD OF deploy/Caddyfile when tenants
+# are addressed by subdomain; it needs the custom image from
+# deploy/caddy.Dockerfile, because the DNS provider module is compiled in.
+#
+# TWO SITE ADDRESSES, NOT ONE
+#
+# A wildcard certificate covers exactly one label. `*.api.example.com` matches
+# acme.api.example.com and does NOT match api.example.com itself, so the apex
+# is listed separately or the shared host loses its certificate the day this
+# file is adopted.
+#
+# CLOUDFLARE_API_TOKEN needs Zone -> DNS -> Edit on this zone and nothing else.
+# It is renewal infrastructure, not a deploy secret: without it certificates
+# stop renewing 90 days later, which is a quiet failure that surfaces as an
+# outage rather than an error.
+#
+# Cloudflare should be grey-cloud (DNS only) for this. Proxied, Cloudflare
+# terminates TLS itself and the browser never sees this certificate -- and its
+# Universal SSL covers only one label, so *.api.example.com is not covered
+# there either without a paid plan.
+
+*.{$API_PUBLIC_HOST}, {$API_PUBLIC_HOST} {
+	# Overwritten, not appended to, so a caller cannot prepend an address of
+	# their choosing. That is the guarantee TRUSTED_PROXY_HOPS=1 relies on --
+	# see the note in src/app.js.
+	#
+	# If Cloudflare is ever switched to proxied, this line destroys the real
+	# client IP (Caddy would see Cloudflare's edge) and every user would share
+	# one rate-limit bucket. Map CF-Connecting-IP in instead of removing it.
+	request_header -X-Forwarded-For
+
+	reverse_proxy api:3000
+
+	# The wildcard is why this file exists: HTTP-01 cannot issue one.
+	tls {
+		dns cloudflare {$CLOUDFLARE_API_TOKEN}
+	}
+
+	# Caddy sets X-Forwarded-Proto: https, which is what makes better-auth mark
+	# the session cookie Secure (it reads the request protocol, not NODE_ENV).
+	encode zstd gzip
+
+	log {
+		output stdout
+		format console
+	}
+}

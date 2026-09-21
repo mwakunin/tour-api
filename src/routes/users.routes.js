@@ -21,11 +21,13 @@ router.get('/', requireAuth, requireAdmin, fetchAllUsers);
 router.get('/stats', requireAuth, requireAdmin, fetchUserStats);
 
 // GET /users/:id - Get user by ID (authenticated users only)
-// Deliberately authenticated but not ownership-restricted: any signed-in user
-// may view another user's profile. See the auth integration test that pins
-// this. NOTE: the handler currently returns `email` and `role`, which is more
-// than "basic profile" implies — worth narrowing the projection, but that is a
-// product decision, not a middleware one.
+//
+// Still not ownership-restricted -- one member may look up another, which is
+// what the admin UI needs -- but no longer deployment-wide. The handler
+// refuses a target who is not a member of the resolved tenant, because "any
+// signed-in user" stopped meaning "a colleague" the moment there was a second
+// operator. The projection still returns `email` and `role`, which is more
+// than "basic profile" implies; narrowing it is a product decision.
 router.get('/:id', requireAuth, fetchUserById);
 
 // PUT /users/:id - Update user by ID

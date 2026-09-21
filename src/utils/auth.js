@@ -4,6 +4,8 @@ import { db } from '#config/database.js';
 import logger from '#config/logger.js';
 import * as schema from '#models/schema.js';
 import { emailService } from '#services/email.service.js';
+import { grantSignupMembership } from '#services/membership.service.js';
+import { currentTenantId } from '#config/tenantContext.js';
 
 // `trustedOrigins` is a SET of origins better-auth accepts as a callbackURL or
 // redirect target, so it is comma-separated — apex, www and a preview URL can be
@@ -18,6 +20,23 @@ import { emailService } from '#services/email.service.js';
 //
 // Falling back to FRONTEND_URL keeps a deploy that has not set TRUSTED_ORIGINS yet
 // behaving exactly as before — a single origin is a valid one-element list.
+// WILDCARDS ARE SUPPORTED, AND NEEDED ONCE OPERATORS HAVE HOSTNAMES.
+//
+// better-auth matches a pattern containing `*` with wildcardMatch rather than
+// string equality, so an unbounded set of tenant origins can be expressed
+// without an env edit per customer:
+//
+//   TRUSTED_ORIGINS=https://*.tourops.com
+//
+// Verified against 1.6.23's matcher rather than assumed. Two things it does
+// that are worth knowing:
+//
+//   * the protocol is part of the match, so `http://acme.tourops.com` is
+//     rejected by that pattern
+//   * `*` spans dots, so it also matches `evil.acme.tourops.com` -- a nested
+//     subdomain. _slugForHost returns UNRESOLVABLE for a label containing a
+//     dot and the request 404s before anything reads the session, so the two
+//     layers cover each other. Do not rely on this one alone.
 const trustedOrigins = (
   process.env.TRUSTED_ORIGINS ||
   process.env.FRONTEND_URL ||
@@ -206,4 +225,32 @@ export const auth = betterAuth({
     },
   },
   trustedOrigins,
+
+  databaseHooks: {
+    user: {
+      create: {
+        /**
+         * Attaches every new account to the operator it registered with.
+         *
+         * Without this a sign-up produced a user belonging to nobody. The
+         * 0029 backfill covered everyone who existed when memberships landed,
+         * and then every registration after it created another orphan --
+         * invisible while authorization only asked about admins, and a
+         * lockout the moment anything asks "which operator is this person's".
+         *
+         * The tenant comes from AsyncLocalStorage, which is why app.js had to
+         * move resolveTenant in front of /api/auth: by the time any later
+         * middleware runs, this hook has already fired.
+         *
+         * grantSignupMembership (membership.service.js) does the retrying and
+         * the compensating cleanup if every retry fails -- see its own doc
+         * comment for why this cannot be one transaction with the user's own
+         * creation, and why failing loudly beats the quieter alternative this
+         * hook used to take.
+         */
+        after: (created) =>
+          grantSignupMembership(created.id, currentTenantId()),
+      },
+    },
+  },
 });

@@ -249,6 +249,96 @@ curl http://localhost:3000/api/auth/me -b cookies.txt
 
 ---
 
+## Per-operator hostnames
+
+Turning on subdomain tenancy — `acme.api.example.com` reaching Acme's data.
+Nothing below is active by default, and none of it works without the rest.
+
+**None of this has been run against real DNS or a real certificate authority.**
+What was verified: the image builds, `dns.providers.cloudflare` is present in
+`caddy list-modules`, and `caddy validate` reports `Valid configuration` for
+`Caddyfile.wildcard`. What was not: obtaining or renewing a certificate, which
+needs a real zone and a real CA. Treat the first deploy as the test.
+
+### 1. DNS
+
+A wildcard record, so a new operator is a row in `tenants` rather than a DNS
+edit and a propagation wait:
+
+```
+*.api.example.com.   A   <the EC2 address>
+api.example.com.     A   <the EC2 address>
+```
+
+The apex is listed separately on purpose: a wildcard covers exactly one label,
+so `*.api.example.com` does **not** match `api.example.com`.
+
+Keep Cloudflare on **grey cloud** (DNS only). Proxied, Cloudflare terminates
+TLS itself and the browser never sees the certificate below — and its Universal
+SSL covers only one label, so `*.api.example.com` is not covered there either
+without a paid plan. Proxying also breaks `X-Forwarded-For`: `deploy/Caddyfile`
+strips the header and Caddy would then see Cloudflare's edge address, putting
+every user in one rate-limit bucket. See the `TRUSTED_PROXY_HOPS` note in
+`src/app.js`.
+
+### 2. Certificates
+
+`HTTP-01` cannot issue a wildcard — Let's Encrypt only does that through
+`DNS-01`, which proves control by writing a TXT record. Caddy can, but the DNS
+provider is a compile-time module, so the stock image will not do:
+
+```bash
+docker build -f deploy/caddy.Dockerfile -t tourops-caddy .
+```
+
+Then in `docker-compose.prod.yml`: uncomment the `build:` block, mount
+`deploy/Caddyfile.wildcard` in place of `deploy/Caddyfile`, and set
+`CLOUDFLARE_API_TOKEN` — scoped to **Zone → DNS → Edit** on that zone and
+nothing else.
+
+That token is renewal infrastructure, not a deploy secret. Without it,
+certificates stop renewing 90 days later, which surfaces as an outage rather
+than an error.
+
+One piece of good news: Caddy shape-checks the token **at startup**, not at
+first renewal. A malformed one fails the boot with
+`API token '...' appears invalid`, so the bad case is loud and immediate
+rather than arriving three months later. A well-formed but wrongly-scoped
+token will still pass that check and fail at issuance — the scope is the part
+to get right by reading, since nothing verifies it early.
+
+### 3. Application
+
+```bash
+TENANT_HOST_SUFFIX=api.example.com     # switches resolution on
+ALLOWED_ORIGIN_DOMAIN=example.com      # CORS for every operator's site
+TRUSTED_ORIGINS=https://*.example.com  # better-auth callbacks
+COOKIE_DOMAIN=.example.com             # one session across subdomains
+```
+
+`TENANT_HOST_SUFFIX` is the switch. Unset — every deployment today — every
+host resolves to the seeded operator and none of the above matters.
+
+### 4. Operators
+
+```bash
+OWNER_EMAIL=jane@acme.test pnpm run tenant:provision -- \
+  --name "Acme Safaris" --slug acme --prefix AC
+```
+
+They must have signed up first: the script grants a membership, it does not
+create logins. It grants `owner` — the one role an administrator arriving later
+cannot revoke — which is what breaks the bootstrap, since `/api/memberships` is
+admin-only and a new tenant has no admins.
+
+### What to check on the first deploy
+
+- `docker compose logs caddy` — certificate obtained for both names
+- `curl -I https://acme.api.example.com/health` — 200, valid certificate
+- an unknown subdomain returns **404**, not the seeded operator's data
+- a signed-in user at one operator gets **403** at another's hostname
+- rate limiting still buckets per client: `req.ip` must not be the proxy's
+
 ## Common gotchas (found the hard way)
 
 - **`npm` vs `pnpm`** — this project has no `package-lock.json`, only `pnpm-lock.yaml`. Never run `npm install`/`npm ci` — always `pnpm`.
