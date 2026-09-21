@@ -19,15 +19,18 @@
 # given no version, and an unpinned --with resolves the module's newest ref --
 # so a rebuild months later could ship an ingress binary nobody ever ran,
 # changed by nothing visible in this repo. The base images are pinned to the
-# same core version for the same reason. Upgrading is an act: bump the three
-# versions below together, rebuild, and re-verify (`caddy validate` plus a
-# real certificate issuance) before it takes traffic.
+# same core version AND by manifest digest: a version tag names whatever the
+# registry serves under it today, so only the digest makes the pin real. The
+# digests are the multi-arch index, so builds on other architectures still
+# resolve. Upgrading is an act: bump the three versions and both digests
+# together, rebuild, and re-verify (`caddy validate` plus a real certificate
+# issuance) before it takes traffic.
 
-FROM caddy:2.10.2-builder-alpine AS builder
+FROM caddy:2.10.2-builder-alpine@sha256:4cff3ae272ea05842adb4546e35961e4947aeea65f80fa1eb62a35b960e84971 AS builder
 
 RUN xcaddy build v2.10.2 \
     --with github.com/caddy-dns/cloudflare@v0.2.4
 
-FROM caddy:2.10.2-alpine
+FROM caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
