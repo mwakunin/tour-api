@@ -12,7 +12,16 @@ import { withTenantDb } from '#config/tenantContext.js';
 import { user } from '#models/user.model.js';
 import { memberships } from '#models/membership.model.js';
 import { ADMIN_ROLES } from '#middleware/auth.middleware.js';
-import { and, eq, or, ilike, inArray, exists, notExists } from 'drizzle-orm';
+import {
+  and,
+  eq,
+  or,
+  ilike,
+  inArray,
+  exists,
+  notExists,
+  sql,
+} from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 /**
@@ -62,19 +71,22 @@ export const getAllUsers = async (filters = {}) => {
       // legacy two values (admin/user) the client sends, and "admin" here
       // means "holds an admin-tier membership row here", nothing about a
       // string on the global user.
-      if (role === 'admin' || role === 'user') {
-        const roleCheck = alias(memberships, 'role_check');
-        const holdsAdminHere = tx
-          .select({ id: roleCheck.id })
-          .from(roleCheck)
-          .where(
-            and(
-              eq(roleCheck.user_id, user.id),
-              eq(roleCheck.is_active, true),
-              inArray(roleCheck.role, ADMIN_ROLES)
-            )
-          );
+      // Built unconditionally: the same subquery both filters (below) and
+      // projects (the role CASE), so the role column in the response and the
+      // role query param answer the same question about the same rows.
+      const roleCheck = alias(memberships, 'role_check');
+      const holdsAdminHere = tx
+        .select({ id: roleCheck.id })
+        .from(roleCheck)
+        .where(
+          and(
+            eq(roleCheck.user_id, user.id),
+            eq(roleCheck.is_active, true),
+            inArray(roleCheck.role, ADMIN_ROLES)
+          )
+        );
 
+      if (role === 'admin' || role === 'user') {
         conditions.push(
           role === 'admin' ? exists(holdsAdminHere) : notExists(holdsAdminHere)
         );
@@ -86,7 +98,20 @@ export const getAllUsers = async (filters = {}) => {
             id: user.id,
             email: user.email,
             name: user.name,
-            role: user.role,
+            // The response contract still says 'admin' or 'user' -- but the
+            // value now answers it about THIS operator. user.role is the
+            // global Better Auth column the grant path never writes, so
+            // projecting it reported whatever legacy string the row carried:
+            // a member promoted through /api/memberships still showed their
+            // ancient global role, and nobody promoted ever showed 'admin'.
+            // Bucketed exactly like the filter above and getUserStats:
+            // 'admin' means an active admin-tier membership here; anything
+            // else reads as 'user'. The exists is per-user, not
+            // per-joined-row, so DISTINCT still collapses a person holding
+            // several roles into one entry with one correct bucket.
+            role: sql`CASE WHEN ${exists(holdsAdminHere)} THEN 'admin' ELSE 'user' END`.as(
+              'role'
+            ),
             createdAt: user.createdAt,
             updatedAt: user.updatedAt,
           })

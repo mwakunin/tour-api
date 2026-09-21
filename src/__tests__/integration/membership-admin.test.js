@@ -346,6 +346,92 @@ describe('membership administration', () => {
     }
   });
 
+  it('refuses a caller with no active membership here from reading someone else', async () => {
+    // The route is reachable by any signed-in account, and loadMembership
+    // never fails a request -- it attaches roles: [] and continues. The
+    // target-side check said nothing about the CALLER, so a former member's
+    // still-valid session could read the current staff directory of the
+    // operator they left: same disclosure the target-side active check
+    // exists to prevent, arriving from the other direction.
+    const { user: former, agent } = await createAuthenticatedAgent(app, redis);
+    const { user: current } = await createAuthenticatedAgent(app, redis);
+
+    try {
+      await db
+        .update(memberships)
+        .set({ is_active: false })
+        .where(eq(memberships.user_id, former.id));
+
+      await agent.get(`/api/users/${current.id}`).expect(403);
+
+      // The lifeline survives: a stripped account can still read ITSELF,
+      // which is the self-exemption's whole point.
+      await agent.get(`/api/users/${former.id}`).expect(200);
+    } finally {
+      await deleteTestUser(former.id);
+      await deleteTestUser(current.id);
+    }
+  });
+
+  it('buckets the listed role by membership tier, not the legacy global column', async () => {
+    // user.role is the global Better Auth column and nothing in the grant
+    // path writes it, so projecting it echoed whatever stale string the row
+    // carried. Both fixtures below render wrongly under the old projection:
+    // the first would show 'admin' on the strength of a legacy string while
+    // holding only a staff membership; the second holds an active admin-tier
+    // membership and would show anything but.
+    const stamp = Date.now();
+    const [mislabelled] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `legacy-string-${stamp}@example.com`,
+        name: 'Legacy Admin String',
+        role: 'admin',
+      })
+      .returning();
+    const [promoted] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `promoted-here-${stamp}@example.com`,
+        name: 'Promoted Through Memberships',
+        role: 'user',
+      })
+      .returning();
+
+    try {
+      await db.insert(memberships).values([
+        { tenant_id: SEED_TENANT_ID, user_id: mislabelled.id, role: 'staff' },
+        { tenant_id: SEED_TENANT_ID, user_id: promoted.id, role: 'admin' },
+      ]);
+
+      // Searched, not paged: the users table outgrew any page size over this
+      // suite's lifetime, and these fixtures are the NEWEST rows -- with the
+      // list now ordered by created_at they land on the last page, not the
+      // first. The search narrows to the stamp each fixture owns.
+      const stale = await adminAgent
+        .get(
+          `/api/users?search=${encodeURIComponent(`legacy-string-${stamp}`)}`
+        )
+        .expect(200);
+      expect(stale.body.users).toHaveLength(1);
+      expect(stale.body.users[0].role).toBe('user');
+
+      const fresh = await adminAgent
+        .get(
+          `/api/users?search=${encodeURIComponent(`promoted-here-${stamp}`)}`
+        )
+        .expect(200);
+      expect(fresh.body.users).toHaveLength(1);
+      expect(fresh.body.users[0].role).toBe('admin');
+    } finally {
+      await db
+        .delete(user)
+        .where(inArray(user.id, [mislabelled.id, promoted.id]));
+    }
+  });
+
   it('filters by the membership held here, not the legacy global user.role', async () => {
     // The column the old filter compared against. A user.role of 'admin' with
     // no matching membership role at this tenant is exactly what

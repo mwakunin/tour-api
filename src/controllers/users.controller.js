@@ -70,6 +70,31 @@ export const fetchUserById = async (req, res, next) => {
 
     const { id } = validationResult.data;
 
+    // THE CALLER's standing, before the target's. The route is reachable by
+    // any signed-in account, and loadMembership never fails a request -- it
+    // attaches roles: [] for an account with no active membership here,
+    // which includes this operator's own former members. A caller passing
+    // only the target check below could read the current directory of people
+    // they left (or never worked with) -- the same disclosure the target-side
+    // active check exists to prevent, arriving from the other direction.
+    // Reading others requires being one of us; reading yourself requires
+    // nothing, which is what keeps a stripped account able to see its own
+    // profile.
+    if (req.user?.id !== id && !(req.membership?.roles?.length > 0)) {
+      logger.warn(
+        '[Users] Lookup refused: caller holds no active membership here',
+        {
+          callerId: req.user?.id,
+          targetId: id,
+        }
+      );
+      return res.status(403).json({
+        error: 'Access denied',
+        message:
+          'Reading other people requires an active membership at this operator.',
+      });
+    }
+
     // Any signed-in caller could read any profile in the deployment, email and
     // role included. That was a deliberate single-tenant decision -- the route
     // comment says so -- and it stops being defensible the moment there is a
