@@ -425,6 +425,20 @@ describe('membership administration', () => {
         .expect(200);
       expect(fresh.body.users).toHaveLength(1);
       expect(fresh.body.users[0].role).toBe('admin');
+
+      // The lookup answers the same question as the list. It used to read
+      // the raw global user.role, so the two endpoints disagreed about the
+      // same person: the list said 'user' (bucketed by membership), the
+      // lookup echoed 'admin' from the stale string.
+      const staleLookup = await adminAgent
+        .get(`/api/users/${mislabelled.id}`)
+        .expect(200);
+      expect(staleLookup.body.user.role).toBe('user');
+
+      const freshLookup = await adminAgent
+        .get(`/api/users/${promoted.id}`)
+        .expect(200);
+      expect(freshLookup.body.user.role).toBe('admin');
     } finally {
       await db
         .delete(user)
