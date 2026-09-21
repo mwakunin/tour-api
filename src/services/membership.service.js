@@ -13,9 +13,10 @@
 // out here -- it is invisible from here, which is why none of these queries
 // carries a tenant_id in its WHERE clause.
 
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 
 import { withTenantDb, currentTenantId } from '#config/tenantContext.js';
+import { db } from '#config/database.js';
 import { memberships } from '#models/membership.model.js';
 import { user } from '#models/user.model.js';
 import { ADMIN_ROLES } from '#middleware/auth.middleware.js';
@@ -122,8 +123,16 @@ export const grantMembership = async ({ user_id, role }) => {
  * mistake is one click.
  */
 export const revokeMembership = async (id) => {
-  const [target] = await withTenantDb((tx) =>
-    tx
+  // ONE transaction, not three. The read, the admin-count and the update used
+  // to be three separate withTenantDb calls, which means three separate round
+  // trips with nothing holding the row still between them. Two concurrent
+  // revocations of two DIFFERENT admins could each read "another admin is
+  // still active" before either write lands, and both then deactivate --
+  // leaving zero. The invariant this function exists to enforce cannot be
+  // checked and then acted on in separate transactions; something has to
+  // serialize the two requests, which is what the lock below does.
+  const revoked = await withTenantDb(async (tx) => {
+    const [target] = await tx
       .select({
         id: memberships.id,
         role: memberships.role,
@@ -131,33 +140,44 @@ export const revokeMembership = async (id) => {
       })
       .from(memberships)
       .where(eq(memberships.id, id))
-      .limit(1)
-  );
+      .limit(1);
 
-  if (!target) throw new Error(NOT_FOUND);
+    if (!target) throw new Error(NOT_FOUND);
 
-  if (target.is_active && ADMIN_ROLES.includes(target.role)) {
-    const remaining = await withTenantDb((tx) =>
-      tx
-        .select({ id: memberships.id, role: memberships.role })
+    if (target.is_active && ADMIN_ROLES.includes(target.role)) {
+      // Locks every currently-active admin row for this tenant. A second
+      // transaction revoking a DIFFERENT admin concurrently tries to lock the
+      // same rows here and blocks until this one commits or rolls back --
+      // then re-reads and sees the count this transaction actually left
+      // behind, not a stale one read before either write happened.
+      //
+      // Scoped to admin roles only, not every active membership: locking the
+      // whole table would serialize an admin revocation against every
+      // unrelated grant and revoke in the tenant for no reason.
+      const activeAdmins = await tx
+        .select({ id: memberships.id })
         .from(memberships)
-        .where(eq(memberships.is_active, true))
-    );
+        .where(
+          and(
+            eq(memberships.is_active, true),
+            inArray(memberships.role, ADMIN_ROLES)
+          )
+        )
+        .for('update');
 
-    const otherAdmins = remaining.filter(
-      (row) => row.id !== id && ADMIN_ROLES.includes(row.role)
-    );
+      const otherAdmins = activeAdmins.filter((row) => row.id !== id);
 
-    if (otherAdmins.length === 0) throw new Error(LAST_ADMIN);
-  }
+      if (otherAdmins.length === 0) throw new Error(LAST_ADMIN);
+    }
 
-  const [revoked] = await withTenantDb((tx) =>
-    tx
+    const [row] = await tx
       .update(memberships)
       .set({ is_active: false, updated_at: new Date() })
       .where(eq(memberships.id, id))
-      .returning()
-  );
+      .returning();
+
+    return row;
+  });
 
   logger.info('[membership] revoked', {
     membershipId: revoked.id,
@@ -165,4 +185,101 @@ export const revokeMembership = async (id) => {
     tenantId: currentTenantId(),
   });
   return revoked;
+};
+
+// A short, bounded retry. The realistic failure here is a transient one -- a
+// dropped connection, a pool briefly exhausted -- and that should not strand
+// an account over a blip that would have cleared on its own.
+const GRANT_RETRY_ATTEMPTS = 3;
+const GRANT_RETRY_DELAY_MS = 200;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Grants the customer membership a fresh sign-up needs. Called from
+ * utils/auth.js's databaseHooks, once per registration.
+ *
+ * WHY THIS CANNOT BE MADE ATOMIC WITH THE SIGN-UP ITSELF
+ *
+ * better-auth queues a `create.after` hook with queueAfterTransactionHook
+ * (@better-auth/core context/transaction.mjs) and runs it once the user's OWN
+ * transaction has already committed. By the time this function is called, the
+ * user row is durably there whether or not this succeeds -- there is no
+ * shared transaction left to roll back into. An earlier version of this hook
+ * logged the failure and returned, which is honest about that constraint but
+ * leaves exactly the account CodeRabbit's review flagged: committed, with no
+ * membership, unable to reach any tenant-scoped route, and unable to sign up
+ * again because the email is now taken.
+ *
+ * WHAT THIS DOES INSTEAD: RETRY, THEN UNDO
+ *
+ * If every retry fails, the failure is not transient, and a user this hook
+ * cannot finish setting up is not a user this system can use. So it deletes
+ * the row it cannot grant a membership to -- account and session cascade with
+ * it, see user.model.js -- and rethrows. Compensating for a write that cannot
+ * be rolled back, rather than a rollback itself.
+ *
+ * That is a real trade, not a free fix: a caller who wins the race against a
+ * genuine outage sees their sign-up fail outright instead of silently
+ * succeeding with no membership. Failing loudly and leaving the email free to
+ * try again is judged the better failure of the two -- an account nobody can
+ * use is not a saved account.
+ *
+ * If the compensating delete ALSO fails, that is the one case this cannot
+ * resolve on its own, and it is logged as exactly that: two failures, needing
+ * a human.
+ */
+export const grantSignupMembership = async (userId, tenantId) => {
+  if (!tenantId) {
+    // Not retryable -- there is no tenant to grant against, which means this
+    // ran outside resolveTenant. That is a wiring bug, not a blip, so it goes
+    // straight to the same compensating cleanup as an exhausted retry rather
+    // than spending three attempts confirming what is already certain.
+    await undoSignup(userId, null);
+    throw new Error(
+      '[membership] sign-up ran with no tenant context; the account could ' +
+        'not be given a membership and was rolled back'
+    );
+  }
+
+  let lastError;
+
+  for (let attempt = 1; attempt <= GRANT_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      await db
+        .insert(memberships)
+        .values({ tenant_id: tenantId, user_id: userId, role: 'customer' });
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < GRANT_RETRY_ATTEMPTS) {
+        await sleep(GRANT_RETRY_DELAY_MS * attempt);
+      }
+    }
+  }
+
+  await undoSignup(userId, tenantId, lastError);
+  throw lastError;
+};
+
+const undoSignup = async (userId, tenantId, cause) => {
+  logger.error(
+    '[membership] sign-up could not be granted a membership after retries; ' +
+      'undoing the account so the email is free to try again',
+    { userId, tenantId, error: cause?.message }
+  );
+
+  try {
+    await db.delete(user).where(eq(user.id, userId));
+  } catch (cleanupError) {
+    // The double failure this whole function exists to make rare. The
+    // account is committed, has no membership, and could not be removed --
+    // there is no automatic recovery left, and it needs a human with
+    // DATABASE_URL.
+    logger.error(
+      '[membership] could not undo the account either -- this user is ' +
+        'stuck with no membership and needs a human to fix it by hand',
+      { userId, tenantId, error: cleanupError.message }
+    );
+  }
 };

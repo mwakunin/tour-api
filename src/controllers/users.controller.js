@@ -14,6 +14,7 @@ import { formatValidationError } from '#utils/format.js';
 import { isTenantAdmin } from '#middleware/auth.middleware.js';
 import {
   isTenantMember,
+  isActiveTenantMember,
   belongsToOtherTenants,
 } from '#middleware/membership.middleware.js';
 
@@ -75,9 +76,15 @@ export const fetchUserById = async (req, res, next) => {
     // second operator, because "any signed-in caller" then includes their
     // competitors' staff.
     //
+    // isActiveTenantMember, not isTenantMember: this is a read, and a
+    // revoked member showing up in a lookup as if they still belonged here is
+    // the disclosure isTenantMember's own doc comment says it will not
+    // protect against -- it answers "were they ever ours", which is right for
+    // update/delete and wrong for who this operator can currently see.
+    //
     // Self is always allowed: a person may read their own profile whether or
     // not they hold a membership anywhere.
-    if (req.user?.id !== id && !(await isTenantMember(id))) {
+    if (req.user?.id !== id && !(await isActiveTenantMember(id))) {
       // The same body this handler returns for an id that exists nowhere, so a
       // caller cannot tell "not here" from "nowhere" -- see the matching
       // reasoning on the update and delete paths.

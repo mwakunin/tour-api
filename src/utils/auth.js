@@ -4,7 +4,7 @@ import { db } from '#config/database.js';
 import logger from '#config/logger.js';
 import * as schema from '#models/schema.js';
 import { emailService } from '#services/email.service.js';
-import { memberships } from '#models/membership.model.js';
+import { grantSignupMembership } from '#services/membership.service.js';
 import { currentTenantId } from '#config/tenantContext.js';
 
 // `trustedOrigins` is a SET of origins better-auth accepts as a callbackURL or
@@ -241,48 +241,15 @@ export const auth = betterAuth({
          * The tenant comes from AsyncLocalStorage, which is why app.js had to
          * move resolveTenant in front of /api/auth: by the time any later
          * middleware runs, this hook has already fired.
+         *
+         * grantSignupMembership (membership.service.js) does the retrying and
+         * the compensating cleanup if every retry fails -- see its own doc
+         * comment for why this cannot be one transaction with the user's own
+         * creation, and why failing loudly beats the quieter alternative this
+         * hook used to take.
          */
-        after: async (created) => {
-          const tenantId = currentTenantId();
-
-          if (!tenantId) {
-            // Not fatal, and deliberately not. The account exists -- better-
-            // auth has already committed it -- so throwing here would leave a
-            // user who cannot sign up again (the email is taken) and cannot be
-            // helped by trying. Loud, and recoverable by granting the
-            // membership by hand.
-            logger.error(
-              '[auth] user created with no tenant context, so no membership ' +
-                'was granted. They will be treated as belonging to no ' +
-                'operator until one is added.',
-              { userId: created.id }
-            );
-            return;
-          }
-
-          try {
-            // Owner connection: `db` is what better-auth is configured with,
-            // and this runs inside better-auth's own transaction rather than
-            // under withTenantDb. The tenant_id written is the resolved one,
-            // so the row lands where the RLS policy would have put it anyway.
-            //
-            // `customer` because this is the public registration path. Staff
-            // are promoted afterwards; there is no self-service route to
-            // authority, which is the point.
-            await db.insert(memberships).values({
-              tenant_id: tenantId,
-              user_id: created.id,
-              role: 'customer',
-            });
-          } catch (error) {
-            // Same reasoning as above: the user row is already committed.
-            logger.error('[auth] failed to grant membership on sign-up', {
-              userId: created.id,
-              tenantId,
-              error: error.message,
-            });
-          }
-        },
+        after: (created) =>
+          grantSignupMembership(created.id, currentTenantId()),
       },
     },
   },

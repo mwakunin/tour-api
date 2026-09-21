@@ -1,4 +1,12 @@
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  afterAll,
+  jest as jestGlobal,
+} from '@jest/globals';
+import request from 'supertest';
 import { eq, inArray } from 'drizzle-orm';
 
 import app from '../../app.js';
@@ -286,6 +294,109 @@ describe('authorization comes from the membership, over HTTP', () => {
     expect(held.roles).not.toContain('owner');
 
     await deleteTestUser(fresh.id);
+  });
+
+  it('absorbs a transient grant failure instead of undoing a recoverable sign-up', async () => {
+    // The other half of the retry's job: a blip that clears on its own must
+    // not be treated the same as a genuine failure. If retrying did nothing
+    // -- or if the code gave up after one attempt -- this would fail exactly
+    // like the case above, for the wrong reason.
+    const email = `absorbed-${Date.now()}@example.com`;
+    const originalInsert = db.insert.bind(db);
+    let attempts = 0;
+    const insertSpy = jestGlobal
+      .spyOn(db, 'insert')
+      .mockImplementation((table) => {
+        if (table === memberships) {
+          attempts += 1;
+          if (attempts < 2) {
+            throw new Error('simulated: transient, clears on retry');
+          }
+        }
+        return originalInsert(table);
+      });
+
+    let response;
+    try {
+      response = await request(app).post('/api/auth/sign-up/email').send({
+        email,
+        password: 'TestPassword123!',
+        name: 'Should Survive A Blip',
+      });
+    } finally {
+      insertSpy.mockRestore();
+    }
+
+    expect(attempts).toBeGreaterThanOrEqual(2);
+    expect(response.status).toBe(200);
+
+    const held = await runWithTenant(SEED_TENANT_ID, () =>
+      loadMembership(response.body.user.id)
+    );
+    expect(held.roles).toEqual(['customer']);
+
+    await deleteTestUser(response.body.user.id);
+  });
+
+  it('undoes the account when the sign-up membership grant cannot be saved', async () => {
+    // grantSignupMembership retries a few times and only gives up once the
+    // failure has repeated. It has no way to tell a transient blip from a
+    // real one except by trying again, so this forces EVERY attempt to fail
+    // -- the case the retries cannot paper over -- rather than just the
+    // first one, which a retry would simply absorb.
+    const email = `undone-${Date.now()}@example.com`;
+    const originalInsert = db.insert.bind(db);
+    const insertSpy = jestGlobal
+      .spyOn(db, 'insert')
+      .mockImplementation((table) => {
+        if (table === memberships) {
+          throw new Error('simulated: membership grant unavailable');
+        }
+        return originalInsert(table);
+      });
+
+    let response;
+    try {
+      response = await request(app).post('/api/auth/sign-up/email').send({
+        email,
+        password: 'TestPassword123!',
+        name: 'Should Not Persist',
+      });
+    } finally {
+      insertSpy.mockRestore();
+    }
+
+    // The failure is not swallowed into an apparently-successful sign-up.
+    // Before this fix it was: better-auth had already committed the user, the
+    // hook logged and returned, and the response looked exactly like success.
+    expect(response.status).toBeGreaterThanOrEqual(400);
+
+    // Compensated, not merely refused: the account this hook could not
+    // finish setting up must not be left behind, or the email is
+    // permanently unusable and nobody asked for that.
+    const [survivor] = await db
+      .select({ id: user.id })
+      .from(user)
+      .where(eq(user.email, email));
+    expect(survivor).toBeUndefined();
+
+    // The actual point of undoing it: the same email can sign up again and
+    // this time gets a real membership, because a committed orphan would
+    // otherwise block every future attempt with this address for good.
+    const retry = await request(app).post('/api/auth/sign-up/email').send({
+      email,
+      password: 'TestPassword123!',
+      name: 'Retried Successfully',
+    });
+
+    expect(retry.status).toBe(200);
+
+    const held = await runWithTenant(SEED_TENANT_ID, () =>
+      loadMembership(retry.body.user.id)
+    );
+    expect(held.roles).toEqual(['customer']);
+
+    await deleteTestUser(retry.body.user.id);
   });
 
   it('will not mutate a user who also works for another operator', async () => {

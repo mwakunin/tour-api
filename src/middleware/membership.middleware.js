@@ -104,6 +104,38 @@ export const isTenantMember = async (userId) => {
 };
 
 /**
+ * Whether `userId` is a member of the ambient tenant RIGHT NOW.
+ *
+ * The is_active-blind sibling above is deliberate for mutation guards: an
+ * administrator must still be able to reach a revoked member's row to update
+ * or delete it, because is_active governs what THEY may do, not what may be
+ * done to them. Reading is different. Listing or looking up a former
+ * member's profile as if they still belonged here is a disclosure the
+ * mutation guards do not have -- an admin screen showing somebody who left is
+ * a directory that is wrong, not a permission that is generous.
+ *
+ * So this exists for exactly one thing: deciding whether a READ may see
+ * someone other than the caller. It must never be used to gate update or
+ * delete, which need the unscoped isTenantMember above to keep working on
+ * exactly the people it should.
+ */
+export const isActiveTenantMember = async (userId) => {
+  if (!currentTenantId() || !userId) return false;
+
+  const rows = await withTenantDb((tx) =>
+    tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(
+        and(eq(memberships.user_id, userId), eq(memberships.is_active, true))
+      )
+      .limit(1)
+  );
+
+  return rows.length > 0;
+};
+
+/**
  * Whether `userId` also belongs to some operator OTHER than the ambient one.
  *
  * `user` is one global row shared by every operator the person works for, so a

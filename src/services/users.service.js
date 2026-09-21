@@ -11,7 +11,9 @@ import { appDb } from '#config/appDatabase.js';
 import { withTenantDb } from '#config/tenantContext.js';
 import { user } from '#models/user.model.js';
 import { memberships } from '#models/membership.model.js';
-import { and, eq, or, ilike } from 'drizzle-orm';
+import { ADMIN_ROLES } from '#middleware/auth.middleware.js';
+import { and, eq, or, ilike, inArray, exists, notExists } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 /**
  * The people who belong to THIS operator.
@@ -29,24 +31,56 @@ export const getAllUsers = async (filters = {}) => {
   try {
     const { search, role, limit = 100, offset = 0 } = filters;
 
-    // Collected and applied once: a second .where() REPLACES the first in
-    // Drizzle rather than adding to it, so searching and filtering by role
-    // together silently dropped the search.
-    const conditions = [];
-
-    if (search && search.trim() !== '') {
-      const searchTerm = `%${search.trim()}%`;
-      conditions.push(
-        or(ilike(user.name, searchTerm), ilike(user.email, searchTerm))
-      );
-    }
-
-    if (role && role !== 'all') {
-      conditions.push(eq(user.role, role));
-    }
-
     const result = await withTenantDb((tx) => {
-      const query = tx
+      // Revoked memberships used to join too, which put a former member back
+      // in the operator's own user list -- somebody who left is still a row
+      // in `memberships`, kept deliberately (loadMembership's own doc
+      // comment: the record survives, is_active is what stops them acting).
+      // That is right for authorization and wrong for a directory: this list
+      // is who the operator can currently reach, not who once could.
+      const conditions = [eq(memberships.is_active, true)];
+
+      if (search && search.trim() !== '') {
+        const searchTerm = `%${search.trim()}%`;
+        conditions.push(
+          or(ilike(user.name, searchTerm), ilike(user.email, searchTerm))
+        );
+      }
+
+      // eq(user.role, role) used to be the filter. user.role is the global
+      // Better Auth column, and nothing in the grant path
+      // (membership.service.js) ever writes it -- so filtering on it answered
+      // "whose LEGACY role string says admin", which stopped meaning anything
+      // the moment authority moved to memberships. A filter for 'user' found
+      // whoever this deployment happened to leave untouched; a filter for
+      // 'admin' missed every admin promoted through /api/memberships and
+      // could include an admin at a DIFFERENT operator who merely shares this
+      // one.
+      //
+      // Bucketed the same way getUserStats buckets, rather than compared
+      // directly to memberships.role: the query params are still the
+      // legacy two values (admin/user) the client sends, and "admin" here
+      // means "holds an admin-tier membership row here", nothing about a
+      // string on the global user.
+      if (role === 'admin' || role === 'user') {
+        const roleCheck = alias(memberships, 'role_check');
+        const holdsAdminHere = tx
+          .select({ id: roleCheck.id })
+          .from(roleCheck)
+          .where(
+            and(
+              eq(roleCheck.user_id, user.id),
+              eq(roleCheck.is_active, true),
+              inArray(roleCheck.role, ADMIN_ROLES)
+            )
+          );
+
+        conditions.push(
+          role === 'admin' ? exists(holdsAdminHere) : notExists(holdsAdminHere)
+        );
+      }
+
+      return tx
         .selectDistinct({
           id: user.id,
           email: user.email,
@@ -56,14 +90,10 @@ export const getAllUsers = async (filters = {}) => {
           updatedAt: user.updatedAt,
         })
         .from(user)
-        .innerJoin(memberships, eq(memberships.user_id, user.id));
-
-      return conditions.length > 0
-        ? query
-            .where(and(...conditions))
-            .limit(limit)
-            .offset(offset)
-        : query.limit(limit).offset(offset);
+        .innerJoin(memberships, eq(memberships.user_id, user.id))
+        .where(and(...conditions))
+        .limit(limit)
+        .offset(offset);
     });
 
     // No `search` here: it is user-supplied and routinely an email address.
