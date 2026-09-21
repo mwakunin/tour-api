@@ -22,7 +22,7 @@ jest.mock('#utils/invoiceGenerator.js', () => ({
 }));
 
 // ✅ FIX 2: Import emailService AFTER mocking dependencies
-import { emailService } from '#services/email.service.js';
+import { emailService, EmailService } from '#services/email.service.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import { tenants } from '#models/tenant.model.js';
 import { runWithTenant } from '#config/tenantContext.js';
@@ -445,6 +445,76 @@ describe('Email Service Integration Tests', () => {
         await expect(emailService.resolveAdminEmail()).resolves.toBe(
           emailService.adminEmail
         );
+      });
+    });
+
+    // The recipient is half of who an email is from. The other half is the
+    // sender identity, which was a hardcoded "Footloose Adventures" constant
+    // — operator #2's booking confirmations and password resets would arrive
+    // wearing operator #1's name. resolveIdentity reads tenants.name.
+    describe('sender identity is resolved per tenant', () => {
+      const stamp = `${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+      let zephyr;
+      let originalResend;
+      let sendSpy;
+
+      beforeEach(async () => {
+        [zephyr] = await db
+          .insert(tenants)
+          .values({ name: 'Zephyr Safaris', slug: `zephyr-${stamp}` })
+          .returning();
+
+        // Spying on emailService.resend.emails does not work: `emails` is a
+        // getter on the Resend SDK instance, so each access hands back a
+        // fresh object and the spy never sees the call. Swap the whole
+        // handle instead, and put the original back so the singleton is
+        // untouched for the rest of the suite.
+        originalResend = emailService.resend;
+        sendSpy = jest.fn().mockResolvedValue({ data: { id: 'zephyr-1' } });
+        emailService.resend = { emails: { send: sendSpy } };
+
+        // The outer suite's beforeEach also mocks the send methods
+        // themselves. These tests exercise the real implementation, so put
+        // the prototype method back on the instance.
+        emailService.sendBookingConfirmation =
+          EmailService.prototype.sendBookingConfirmation;
+      });
+
+      afterEach(async () => {
+        emailService.resend = originalResend;
+        await db.delete(tenants).where(eq(tenants.id, zephyr.id));
+      });
+
+      it('brands a real send with the operator, not the deployment', async () => {
+        await runWithTenant(zephyr.id, () =>
+          emailService.sendBookingConfirmation({
+            id: zephyr.id,
+            customer_name: 'Jane Customer',
+            customer_email: 'jane@example.com',
+            booking_reference: `ZEPH-${stamp}`,
+            start_date: new Date(Date.now() + 30 * 86400000),
+            end_date: new Date(Date.now() + 33 * 86400000),
+            group_size: 2,
+            total_price: '2000.00',
+            currency: 'KES',
+            payment_status: 'pending',
+          })
+        );
+
+        const sent = sendSpy.mock.calls[0][0];
+        expect(sent.from).toMatch(/^Zephyr Safaris </);
+        // The signature block is template copy, not just the envelope.
+        expect(sent.html).toContain('Zephyr Safaris Team');
+        expect(sent.html).not.toContain('Footloose Adventures Team');
+      });
+
+      // Pins the no-context fallback on purpose: sends outside any tenant
+      // (if a caller ever appears) must degrade to the deployment name, not
+      // to undefined. The default is the seed operator's name by design.
+      it('falls back to the deployment name outside any tenant context', async () => {
+        const identity = await emailService.resolveIdentity();
+        expect(identity.name).toBe('Footloose Adventures');
+        expect(identity.email).toContain('@');
       });
     });
   });

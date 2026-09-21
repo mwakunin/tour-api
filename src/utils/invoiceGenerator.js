@@ -2,7 +2,24 @@
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-export const generateInvoicePDF = (booking) => {
+// Operator identity for the letterhead, passed in by the caller —
+// email.service.js resolves it from the tenant row (see resolveIdentity there)
+// — with deployment-level fallbacks for the pieces the tenants table does not
+// carry. Branding baked in here printed operator #1's name on operator #2's
+// invoices; every field below is operator-visible copy and belongs to
+// configuration (CLAUDE.md's branding rule).
+const BRAND_DEFAULTS = {
+  name: process.env.INVOICE_BRAND_NAME || 'Footloose Adventures',
+  email: process.env.INVOICE_CONTACT_EMAIL || 'info@footlooseadventures.co.ke',
+  phone: process.env.INVOICE_PHONE || '+254 700 000 000',
+  addressLine1: process.env.INVOICE_ADDRESS_LINE1 || 'P.O. Box 12345',
+  addressLine2: process.env.INVOICE_ADDRESS_LINE2 || 'Nairobi, Kenya',
+  tagline: process.env.INVOICE_TAGLINE || 'Unforgettable Safari Experiences',
+  website: process.env.INVOICE_WEBSITE || 'www.footlooseadventures.co.ke',
+};
+
+export const generateInvoicePDF = (booking, operator = {}) => {
+  const brand = { ...BRAND_DEFAULTS, ...operator };
   const doc = new jsPDF();
 
   // Colors
@@ -25,11 +42,11 @@ export const generateInvoicePDF = (booking) => {
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(24);
   doc.setFont('helvetica', 'bold');
-  doc.text('FOOTLOOSE ADVENTURES', pageWidth / 2, 20, { align: 'center' });
+  doc.text(brand.name.toUpperCase(), pageWidth / 2, 20, { align: 'center' });
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
-  doc.text('Unforgettable Safari Experiences', pageWidth / 2, 30, {
+  doc.text(brand.tagline, pageWidth / 2, 30, {
     align: 'center',
   });
 
@@ -55,15 +72,15 @@ export const generateInvoicePDF = (booking) => {
   yPos += 6;
 
   doc.setFont('helvetica', 'normal');
-  doc.text('Footloose Adventures Ltd', leftCol, yPos);
+  doc.text(brand.name, leftCol, yPos);
   yPos += 5;
-  doc.text('P.O. Box 12345', leftCol, yPos);
+  doc.text(brand.addressLine1, leftCol, yPos);
   yPos += 5;
-  doc.text('Nairobi, Kenya', leftCol, yPos);
+  doc.text(brand.addressLine2, leftCol, yPos);
   yPos += 5;
-  doc.text('Email: info@footlooseadventures.co.ke', leftCol, yPos);
+  doc.text(`Email: ${brand.email}`, leftCol, yPos);
   yPos += 5;
-  doc.text('Phone: +254 700 000 000', leftCol, yPos);
+  doc.text(`Phone: ${brand.phone}`, leftCol, yPos);
 
   // Right column - Customer Info & Invoice Details
   const rightCol = pageWidth - 80;
@@ -329,18 +346,20 @@ export const generateInvoicePDF = (booking) => {
   doc.setTextColor(100, 100, 100);
 
   doc.text(
-    'Thank you for choosing Footloose Adventures!',
+    `Thank you for choosing ${brand.name}!`,
     pageWidth / 2,
     footerY + 2,
-    { align: 'center' }
+    {
+      align: 'center',
+    }
   );
   doc.text(
-    'For inquiries, contact us at info@footlooseadventures.co.ke or +254 700 000 000',
+    `For inquiries, contact us at ${brand.email} or ${brand.phone}`,
     pageWidth / 2,
     footerY + 8,
     { align: 'center' }
   );
-  doc.text('www.footlooseadventures.co.ke', pageWidth / 2, footerY + 14, {
+  doc.text(brand.website, pageWidth / 2, footerY + 14, {
     align: 'center',
   });
 

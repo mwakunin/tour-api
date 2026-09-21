@@ -34,10 +34,25 @@ const formatCurrency = (amount, currency) => {
   })}`;
 };
 
-const FROM_EMAIL =
-  process.env.NODE_ENV === 'production'
-    ? 'Footloose Adventures <info@footlooseadventures.co.ke>'
-    : 'Footloose Adventures <onboarding@resend.dev>';
+// The sending ADDRESS must sit on the Resend-verified domain, which is the
+// deployment's mail infrastructure -- one per environment, hence env config.
+// The display NAME is operator identity, resolved per send in resolveIdentity()
+// from the tenant row; baking "Footloose Adventures" in here would brand
+// operator #2's password resets and booking confirmations with operator #1's
+// name (see the branding note in CLAUDE.md).
+const FROM_ADDRESS =
+  process.env.EMAIL_FROM_ADDRESS ||
+  (process.env.NODE_ENV === 'production'
+    ? 'info@footlooseadventures.co.ke'
+    : 'onboarding@resend.dev');
+
+// Deployment-level fallbacks, reachable only when there is no tenant context
+// or the tenant row cannot be read. EMAIL_FROM_NAME defaults to the seed
+// operator because this deployment was built around it; the seed tenant's own
+// row carries the same name, so normal sends never hit these.
+const FALLBACK_SENDER_NAME =
+  process.env.EMAIL_FROM_NAME || 'Footloose Adventures';
+const OPERATOR_PHONE = process.env.OPERATOR_PHONE || '+254 742 060 624';
 
 const ADMIN_EMAIL =
   process.env.ADMIN_EMAIL || 'footlooseadventures2026@gmail.com';
@@ -50,7 +65,6 @@ const seedTenantId = () => process.env.SEED_TENANT_ID || SEED_TENANT_ID;
 class EmailService {
   constructor() {
     this.resend = new Resend(process.env.RESEND_API_KEY);
-    this.fromEmail = FROM_EMAIL;
     this.adminEmail = ADMIN_EMAIL;
   }
 
@@ -101,6 +115,38 @@ class EmailService {
     }
   }
 
+  // The operator the CUSTOMER sees: "Zephyr Safaris <sender@deploy-domain>".
+  // Twin of resolveAdminEmail, which handles the recipient side. The name
+  // comes from the tenant row (NOT NULL, so a live tenant always has one);
+  // the address is deployment infrastructure and was fixed above.
+  //
+  // Deliberately fail-open, unlike resolveAdminEmail: a wrong display name on
+  // a lookup failure is a cosmetic fault, while dropping a booking
+  // confirmation or a password reset the customer is waiting on is not.
+  async resolveIdentity() {
+    const tenantId = currentTenantId();
+    if (!tenantId) {
+      return { name: FALLBACK_SENDER_NAME, email: FROM_ADDRESS };
+    }
+
+    try {
+      const [tenant] = await withTenantDb((tx) =>
+        tx
+          .select({ name: tenants.name })
+          .from(tenants)
+          .where(eq(tenants.id, tenantId))
+          .limit(1)
+      );
+      if (tenant?.name) return { name: tenant.name, email: FROM_ADDRESS };
+    } catch (error) {
+      logger.error(
+        'Tenant name lookup failed; sending under the deployment name',
+        { tenantId, error: error.message }
+      );
+    }
+    return { name: FALLBACK_SENDER_NAME, email: FROM_ADDRESS };
+  }
+
   // ✅ Send booking confirmation email
   async sendBookingConfirmation(booking) {
     try {
@@ -134,8 +180,10 @@ class EmailService {
         ? `${siteUrl}/bookings/${booking.id}/payment`
         : null;
 
+      const identity = await this.resolveIdentity();
+
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
+        from: `${identity.name} <${identity.email}>`,
         to: [booking.customer_email],
         subject: `Booking Confirmation - ${booking.booking_reference}`,
         html: `
@@ -205,10 +253,10 @@ class EmailService {
             
             <p>We look forward to hosting you on this amazing adventure!</p>
             <p>If you have any questions, please don't hesitate to contact us.</p>
-            
-            <p>Best regards,<br>Footloose Adventures Team<br>
-            📧 info@footlooseadventures.co.ke<br>
-            📞 +254 742 060 624</p>
+
+            <p>Best regards,<br>${escapeHtml(identity.name)} Team<br>
+            📧 ${identity.email}<br>
+            📞 ${OPERATOR_PHONE}</p>
           </div>
         `,
       });
@@ -232,13 +280,17 @@ class EmailService {
   // ✅ Send payment confirmation email with invoice
   async sendPaymentConfirmation(booking) {
     try {
-      const invoicePDF = generateInvoicePDF(booking);
+      const identity = await this.resolveIdentity();
+      // The invoice letterhead is the same operator identity as the email's
+      // sender — one resolution, passed through, so a PDF and its covering
+      // email can never disagree about who issued them.
+      const invoicePDF = generateInvoicePDF(booking, identity);
       const pricePerPerson = booking.price_per_person
         ? parseFloat(booking.price_per_person)
         : parseFloat(booking.total_price) / booking.group_size;
 
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
+        from: `${identity.name} <${identity.email}>`,
         to: [booking.customer_email],
         subject: `Payment Confirmed - ${booking.booking_reference}`,
         html: `
@@ -269,10 +321,10 @@ class EmailService {
           </div>
           
           <p>Your booking is now confirmed. We'll send you further details closer to your tour date.</p>
-          
-          <p>Best regards,<br>Footloose Adventures Team<br>
-          📧 info@footlooseadventures.co.ke<br>
-          📞 +254 742 060 624</p>
+
+          <p>Best regards,<br>${escapeHtml(identity.name)} Team<br>
+          📧 ${identity.email}<br>
+          📞 ${OPERATOR_PHONE}</p>
         </div>
       `,
         attachments: [
@@ -303,8 +355,9 @@ class EmailService {
   // ✅ Send booking cancellation email
   async sendBookingCancellation(booking) {
     try {
+      const identity = await this.resolveIdentity();
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
+        from: `${identity.name} <${identity.email}>`,
         to: [booking.customer_email],
         subject: `Booking Cancelled - ${booking.booking_reference}`,
         html: `
@@ -322,8 +375,8 @@ class EmailService {
             </div>
             
             <p>If you have any questions or would like to rebook, please contact us.</p>
-            
-            <p>Best regards,<br>Footloose Adventures Team</p>
+
+            <p>Best regards,<br>${escapeHtml(identity.name)} Team</p>
           </div>
         `,
       });
@@ -347,15 +400,16 @@ class EmailService {
   // ✅ Send password reset email
   async sendResetPasswordEmail(user, resetUrl) {
     try {
+      const identity = await this.resolveIdentity();
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
+        from: `${identity.name} <${identity.email}>`,
         to: [user.email],
-        subject: 'Reset your password - Footloose Adventures',
+        subject: `Reset your password - ${sanitizeSubject(identity.name)}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h1 style="color: #ff5722;">Reset Your Password</h1>
             <p>Hi ${user.name || 'there'},</p>
-            <p>We received a request to reset the password for your Footloose Adventures account. Click the button below to choose a new password:</p>
+            <p>We received a request to reset the password for your ${escapeHtml(identity.name)} account. Click the button below to choose a new password:</p>
 
             <div style="margin: 30px 0;">
               <a href="${escapeHtml(resetUrl)}" style="background: #ff5722; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">Reset Password</a>
@@ -366,7 +420,7 @@ class EmailService {
 
             <p style="color: #666; font-size: 14px;">This link will expire in 1 hour. If you didn't request a password reset, you can safely ignore this email.</p>
 
-            <p>Best regards,<br>Footloose Adventures Team</p>
+            <p>Best regards,<br>${escapeHtml(identity.name)} Team</p>
           </div>
         `,
       });
@@ -389,9 +443,19 @@ class EmailService {
   // ✅ Send contact form email
   async sendContactFormEmail({ name, email, message, phone }) {
     try {
+      const identity = await this.resolveIdentity();
+
+      // The operator's own inbox, not a deployment-wide default: operator #2's
+      // leads must not land in operator #1's email -- the same cross-tenant
+      // leak resolveAdminEmail closed for booking notifications. CONTACT_EMAIL
+      // stays first as the deployment's explicit override.
+      const adminEmail =
+        process.env.CONTACT_EMAIL || (await this.resolveAdminEmail());
+      if (!adminEmail) return null;
+
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
-        to: [process.env.CONTACT_EMAIL || 'info@footlooseadventures.co.ke'],
+        from: `${identity.name} <${identity.email}>`,
+        to: [adminEmail],
         replyTo: email,
         subject: `New Contact Form Submission from ${sanitizeSubject(name)}`,
         html: `
@@ -424,9 +488,16 @@ class EmailService {
   // ✅ Send inquiry to business
   async sendInquiryEmail(inquiry) {
     try {
+      const identity = await this.resolveIdentity();
+
+      // Same recipient rule as sendContactFormEmail: the operator's own inbox.
+      const adminEmail =
+        process.env.CONTACT_EMAIL || (await this.resolveAdminEmail());
+      if (!adminEmail) return null;
+
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
-        to: [process.env.CONTACT_EMAIL || 'info@footlooseadventures.co.ke'],
+        from: `${identity.name} <${identity.email}>`,
+        to: [adminEmail],
         replyTo: inquiry.email,
         subject: `Tour Inquiry: ${sanitizeSubject(inquiry.subject)}`,
         html: `
@@ -487,10 +558,11 @@ class EmailService {
   // ✅ Send confirmation to customer
   async sendInquiryConfirmation(inquiry) {
     try {
+      const identity = await this.resolveIdentity();
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
+        from: `${identity.name} <${identity.email}>`,
         to: [inquiry.email],
-        subject: 'We received your inquiry - Footloose Adventures',
+        subject: `We received your inquiry - ${sanitizeSubject(identity.name)}`,
         html: `
           <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h1 style="color: #ff5722;">Thank You for Your Inquiry!</h1>
@@ -507,9 +579,9 @@ class EmailService {
             </div>
 
             <p>Best regards,<br>
-            <strong>Footloose Adventures Team</strong><br>
-            Email: info@footlooseadventures.co.ke<br>
-            Phone: +254 742 060 624</p>
+            <strong>${escapeHtml(identity.name)} Team</strong><br>
+            Email: ${identity.email}<br>
+            Phone: ${OPERATOR_PHONE}</p>
           </div>
         `,
       });
@@ -537,8 +609,9 @@ class EmailService {
       const adminEmail = await this.resolveAdminEmail();
       if (!adminEmail) return null;
 
+      const identity = await this.resolveIdentity();
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
+        from: `${identity.name} <${identity.email}>`,
         to: [adminEmail],
         subject: `🎉 New Booking: ${booking.booking_reference}`,
         html: `
@@ -634,8 +707,9 @@ class EmailService {
       const adminEmail = await this.resolveAdminEmail();
       if (!adminEmail) return null;
 
+      const identity = await this.resolveIdentity();
       const { data, error } = await this.resend.emails.send({
-        from: this.fromEmail,
+        from: `${identity.name} <${identity.email}>`,
         to: [adminEmail],
         subject: `📊 Daily Booking Summary - ${today.toLocaleDateString()}`,
         html: `

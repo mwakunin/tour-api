@@ -42,7 +42,11 @@ export const uploadFile = async (file, options = {}) => {
       // body leaves ImageKit to sniff it — pass what multer already parsed.
       file: await toFile(file.buffer, uniqueFileName, { type: file.mimetype }),
       fileName: uniqueFileName,
-      folder: `footlooseadventures/${folder}`,
+      // ImageKit folder root: deployment-level (one ImageKit account per
+      // environment), not per-tenant -- env-configurable per CLAUDE.md's
+      // branding rule. Changing it moves where NEW files land; existing
+      // objects keep their stored path.
+      folder: `${process.env.IMAGEKIT_FOLDER_ROOT || 'footlooseadventures'}/${folder}`,
       useUniqueFileName: false,
       tags: [folder, ...tags],
       // v7 returns hasTransparency/exif under `metadata`, which is omitted
