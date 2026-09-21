@@ -14,12 +14,20 @@
 #
 # Swap caddy-dns/cloudflare for another provider if DNS moves; the Caddyfile's
 # `dns` directive changes name with it.
+#
+# EVERYTHING IS PINNED, deliberately. xcaddy builds the latest Caddy core when
+# given no version, and an unpinned --with resolves the module's newest ref --
+# so a rebuild months later could ship an ingress binary nobody ever ran,
+# changed by nothing visible in this repo. The base images are pinned to the
+# same core version for the same reason. Upgrading is an act: bump the three
+# versions below together, rebuild, and re-verify (`caddy validate` plus a
+# real certificate issuance) before it takes traffic.
 
-FROM caddy:2-builder-alpine AS builder
+FROM caddy:2.10.2-builder-alpine AS builder
 
-RUN xcaddy build \
-    --with github.com/caddy-dns/cloudflare
+RUN xcaddy build v2.10.2 \
+    --with github.com/caddy-dns/cloudflare@v0.2.4
 
-FROM caddy:2-alpine
+FROM caddy:2.10.2-alpine
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
