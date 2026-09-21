@@ -448,9 +448,12 @@ class EmailService {
       // The operator's own inbox, not a deployment-wide default: operator #2's
       // leads must not land in operator #1's email -- the same cross-tenant
       // leak resolveAdminEmail closed for booking notifications. CONTACT_EMAIL
-      // stays first as the deployment's explicit override.
-      const adminEmail =
-        process.env.CONTACT_EMAIL || (await this.resolveAdminEmail());
+      // is deliberately NOT consulted first, even as an "explicit override":
+      // the variable predates tenancy, is not tenant-scoped, and nobody
+      // re-considers it per operator -- so honoring it here would quietly
+      // reroute every tenant's contact PII to one mailbox. An operator sets
+      // tenants.admin_email instead.
+      const adminEmail = await this.resolveAdminEmail();
       if (!adminEmail) return null;
 
       const { data, error } = await this.resend.emails.send({
@@ -490,9 +493,9 @@ class EmailService {
     try {
       const identity = await this.resolveIdentity();
 
-      // Same recipient rule as sendContactFormEmail: the operator's own inbox.
-      const adminEmail =
-        process.env.CONTACT_EMAIL || (await this.resolveAdminEmail());
+      // Same recipient rule as sendContactFormEmail: the operator's own inbox,
+      // tenant-scoped, with no deployment-wide override.
+      const adminEmail = await this.resolveAdminEmail();
       if (!adminEmail) return null;
 
       const { data, error } = await this.resend.emails.send({

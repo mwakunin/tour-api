@@ -461,7 +461,11 @@ describe('Email Service Integration Tests', () => {
       beforeEach(async () => {
         [zephyr] = await db
           .insert(tenants)
-          .values({ name: 'Zephyr Safaris', slug: `zephyr-${stamp}` })
+          .values({
+            name: 'Zephyr Safaris',
+            slug: `zephyr-${stamp}`,
+            admin_email: 'inbox@zephyr.example',
+          })
           .returning();
 
         // Spying on emailService.resend.emails does not work: `emails` is a
@@ -475,9 +479,11 @@ describe('Email Service Integration Tests', () => {
 
         // The outer suite's beforeEach also mocks the send methods
         // themselves. These tests exercise the real implementation, so put
-        // the prototype method back on the instance.
+        // the prototype methods back on the instance.
         emailService.sendBookingConfirmation =
           EmailService.prototype.sendBookingConfirmation;
+        emailService.sendContactFormEmail =
+          EmailService.prototype.sendContactFormEmail;
       });
 
       afterEach(async () => {
@@ -515,6 +521,30 @@ describe('Email Service Integration Tests', () => {
         const identity = await emailService.resolveIdentity();
         expect(identity.name).toBe('Footloose Adventures');
         expect(identity.email).toContain('@');
+      });
+
+      // CONTACT_EMAIL used to be consulted FIRST, on the theory that an
+      // explicitly configured variable is an override. But it predates
+      // tenancy and is not tenant-scoped: a deployment configured around
+      // operator #1 would reroute operator #2's contact-form and inquiry
+      // PII to operator #1's mailbox. The tenant resolver wins, full stop.
+      it('delivers contact PII to the tenant inbox even when CONTACT_EMAIL is set', async () => {
+        process.env.CONTACT_EMAIL = 'deploy-wide@example.com';
+        try {
+          await runWithTenant(zephyr.id, () =>
+            emailService.sendContactFormEmail({
+              name: 'Jane Prospect',
+              email: 'prospect@example.com',
+              message: 'Price for a group of six?',
+            })
+          );
+
+          const sent = sendSpy.mock.calls[0][0];
+          expect(sent.to).toEqual(['inbox@zephyr.example']);
+          expect(sent.to).not.toContain('deploy-wide@example.com');
+        } finally {
+          delete process.env.CONTACT_EMAIL;
+        }
       });
     });
   });
