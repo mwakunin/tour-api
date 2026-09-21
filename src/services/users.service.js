@@ -167,6 +167,41 @@ export const getUserById = async (id) => {
   }
 };
 
+/**
+ * The tenant-facing read of one user: the same global row, but with the role
+ * bucket answered about the AMBIENT operator, exactly as getAllUsers buckets
+ * it -- 'admin' when an active admin-tier membership exists here, else
+ * 'user'. getUserById alone projects the legacy global user.role, which the
+ * grant path never writes, so a lookup and a list of the same person would
+ * disagree the moment anyone was promoted through /api/memberships.
+ *
+ * The membership half runs through withTenantDb on purpose: memberships is
+ * policied, so the exists check is confined to the current tenant by the
+ * same mechanism the list relies on -- not by a WHERE clause this file has
+ * to remember. updateUser and deleteUser keep using the raw global reader;
+ * they exist to find the row, and their callers' authority is decided by
+ * the controller's own guards, not by what role the row claims.
+ */
+export const getTenantUserById = async (id) => {
+  const foundUser = await getUserById(id);
+
+  const [adminRow] = await withTenantDb((tx) =>
+    tx
+      .select({ id: memberships.id })
+      .from(memberships)
+      .where(
+        and(
+          eq(memberships.user_id, id),
+          eq(memberships.is_active, true),
+          inArray(memberships.role, ADMIN_ROLES)
+        )
+      )
+      .limit(1)
+  );
+
+  return { ...foundUser, role: adminRow ? 'admin' : 'user' };
+};
+
 export const updateUser = async (id, updates) => {
   try {
     // First check if user exists

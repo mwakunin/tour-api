@@ -147,7 +147,10 @@ app.use(
   swaggerUi.serve,
   swaggerUi.setup(swaggerSpec, {
     customCss: '.swagger-ui .topbar { display: none }',
-    customSiteTitle: 'Footloose Adventures API Documentation',
+    // Docs belong to the deployment, not to one operator -- env-configurable
+    // per CLAUDE.md's branding rule; the default is the seed operator's name.
+    customSiteTitle:
+      process.env.API_DOC_TITLE || 'Footloose Adventures API Documentation',
   })
 );
 

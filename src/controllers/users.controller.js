@@ -1,7 +1,7 @@
 import logger from '#config/logger.js';
 import {
   getAllUsers,
-  getUserById,
+  getTenantUserById,
   updateUser,
   deleteUser,
   getUserStats,
@@ -116,7 +116,11 @@ export const fetchUserById = async (req, res, next) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const user = await getUserById(id);
+    // getTenantUserById, not the raw global reader: the list now buckets role
+    // by active membership at THIS operator, and a lookup of the same person
+    // answering with the legacy global string would disagree with the list
+    // they appear in. Same response shape, one consistent answer.
+    const user = await getTenantUserById(id);
 
     logger.info(`User ${user.id} retrieved successfully`);
     res.json({

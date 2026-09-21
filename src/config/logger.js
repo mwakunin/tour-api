@@ -31,7 +31,12 @@ const logger = winston.createLogger({
     winston.format.errors({ stack: true }),
     winston.format.json()
   ),
-  defaultMeta: { service: 'footlooseadventures-api' },
+  // Log label for the deployment. Not customer-facing, but it is still an
+  // operator name baked into config -- env-configurable per CLAUDE.md's
+  // branding rule, defaulting to the seed operator.
+  defaultMeta: {
+    service: process.env.LOG_SERVICE_NAME || 'footlooseadventures-api',
+  },
   transports,
 });
 
