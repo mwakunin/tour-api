@@ -179,6 +179,45 @@ export const belongsToOtherTenants = async (userId) => {
 };
 
 /**
+ * Whether `userId` is an ACTIVE member of some operator other than the
+ * ambient one.
+ *
+ * Looks like a filter-away of belongsToOtherTenants, and the difference is
+ * the whole point. That one guards mutations of the shared `user` row, where
+ * even a revoked membership elsewhere means the row is still somebody else's
+ * history -- and its doc comment explains why ANY membership must count. This
+ * one guards acts whose blast radius is the person's SESSIONS, which are one
+ * global set shared by every operator they work for. A membership another
+ * operator has already revoked means that operator has nothing running on
+ * this person: no working session of theirs is destroyed by acting here. Only
+ * an active one is a colleague mid-shift somewhere else, whose session is not
+ * ours to end.
+ *
+ * Same owner connection, same fail-closed default, for the same reasons
+ * belongsToOtherTenants gives above: RLS makes the question unanswerable from
+ * the tenant connection, and an unanswerable safety question is not a yes.
+ */
+export const activeAtOtherTenants = async (userId) => {
+  const tenantId = currentTenantId();
+
+  if (!tenantId || !userId) return true;
+
+  const rows = await db
+    .select({ tenant_id: memberships.tenant_id })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.user_id, userId),
+        eq(memberships.is_active, true),
+        ne(memberships.tenant_id, tenantId)
+      )
+    )
+    .limit(1);
+
+  return rows.length > 0;
+};
+
+/**
  * Attaches `req.membership`, or leaves it null.
  *
  * Never fails the request. A membership lookup that throws is a database

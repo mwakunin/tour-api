@@ -513,6 +513,107 @@ describe('authorization comes from the membership, over HTTP', () => {
     await deleteTestUser(member.id);
   });
 
+  it('will not force-logout a member whose account is active at another operator', async () => {
+    // Sessions are one global set per account -- the schema has no per-tenant
+    // session to offer -- so force-logout ends the person's sessions
+    // EVERYWHERE. An active membership at another operator means that
+    // operator has a colleague mid-shift whose working session this endpoint
+    // would destroy; this admin's authority stops at their own operator, the
+    // same boundary the /users/:id 409 enforces for the shared user row.
+    const { user: member } = await createAuthenticatedAgent(app, redis);
+    const otherTenant = crypto.randomUUID();
+
+    try {
+      await db.insert(tenants).values({
+        id: otherTenant,
+        name: 'Logout Other Operator',
+        slug: `logout-shared-${Date.now()}`,
+        booking_ref_prefix: 'LS',
+      });
+      await db.insert(memberships).values({
+        tenant_id: otherTenant,
+        user_id: member.id,
+        role: 'staff',
+      });
+
+      await adminAgent.post(`/api/auth/force-logout/${member.id}`).expect(409);
+
+      // Refused, not silently degraded: the sessions -- including the ones
+      // the other operator depends on -- are all still standing.
+      const remaining = await db
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.userId, member.id));
+      expect(remaining.length).toBeGreaterThan(0);
+    } finally {
+      await db.delete(user).where(eq(user.id, member.id));
+      await db.delete(tenants).where(eq(tenants.id, otherTenant));
+    }
+  });
+
+  it('force-logs-out a member whose only other membership is revoked', async () => {
+    // The is_active filter on the shared-account guard is load-bearing, not
+    // decoration. An operator that already revoked this person has nothing
+    // running on them -- no working session of theirs is destroyed by acting
+    // here -- so the guard must not count it. Drop the filter and this test
+    // answers 409 instead of clearing the sessions it should clear.
+    const { user: member } = await createAuthenticatedAgent(app, redis);
+    const otherTenant = crypto.randomUUID();
+
+    try {
+      await db.insert(tenants).values({
+        id: otherTenant,
+        name: 'Former Other Operator',
+        slug: `logout-revoked-${Date.now()}`,
+        booking_ref_prefix: 'LR',
+      });
+      await db.insert(memberships).values({
+        tenant_id: otherTenant,
+        user_id: member.id,
+        role: 'staff',
+        is_active: false,
+      });
+
+      const before = await db
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.userId, member.id));
+      expect(before.length).toBeGreaterThan(0);
+
+      await adminAgent.post(`/api/auth/force-logout/${member.id}`).expect(200);
+
+      const after = await db
+        .select({ id: session.id })
+        .from(session)
+        .where(eq(session.userId, member.id));
+      expect(after).toHaveLength(0);
+    } finally {
+      await db.delete(user).where(eq(user.id, member.id));
+      await db.delete(tenants).where(eq(tenants.id, otherTenant));
+    }
+  });
+
+  it('will not force-logout a member this operator has already revoked', async () => {
+    // The unscoped isTenantMember answered "were they ever ours", which is
+    // the right question for reaching a former member's ROW to manage it and
+    // the wrong one for acting on their sessions. A revoked member keeps
+    // nothing this endpoint could meaningfully end -- their session reaches
+    // no tenant route here -- so a former member is refused with the same
+    // body as an id that exists nowhere.
+    const { user: member } = await createAuthenticatedAgent(app, redis);
+
+    try {
+      await db
+        .update(memberships)
+        .set({ is_active: false })
+        .where(eq(memberships.user_id, member.id));
+
+      await adminAgent.post(`/api/auth/force-logout/${member.id}`).expect(404);
+    } finally {
+      await db.delete(user).where(eq(user.id, member.id));
+    }
+  });
+
   it('revoking the membership revokes admin, without touching the session', async () => {
     await adminAgent.get('/api/counterparties').expect(200);
 

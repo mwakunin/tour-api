@@ -3,7 +3,10 @@ import { eq } from 'drizzle-orm';
 import logger from '#config/logger.js';
 import { appDb } from '#config/appDatabase.js';
 import { session } from '#models/user.model.js';
-import { isTenantMember } from '#middleware/membership.middleware.js';
+import {
+  isActiveTenantMember,
+  activeAtOtherTenants,
+} from '#middleware/membership.middleware.js';
 
 export const getCurrentUser = (req, res) => {
   try {
@@ -23,6 +26,14 @@ export const forceLogout = async (req, res) => {
     // `user` table -- so without this an admin at one operator could revoke
     // the sessions of another operator's users, logging them out at will.
     //
+    // isActiveTenantMember, not the unscoped isTenantMember. The unscoped
+    // check is deliberately what the update and delete paths use, because an
+    // administrator must still reach a revoked member's ROW to manage it. But
+    // force-logout does not touch their row -- it acts on their sessions, one
+    // global set, and what it may act on is a question of who is still this
+    // operator's, not of who once was. A former member's session can reach no
+    // tenant route here anyway; there is nothing left to force out.
+    //
     // No self-exemption, unlike the /users/:id paths: force-logout is only
     // ever an admin acting on someone, and an admin here necessarily holds a
     // membership here.
@@ -30,12 +41,42 @@ export const forceLogout = async (req, res) => {
     // Same body as a genuinely unknown id, for the same reason it is used in
     // users.controller.js: a distinguishable rejection confirms the id names a
     // real account somewhere.
-    if (!(await isTenantMember(userId))) {
-      logger.warn('[Auth] Force logout refused: target is not a member', {
-        targetUserId: userId,
-        adminId: req.user.id,
-      });
+    if (!(await isActiveTenantMember(userId))) {
+      logger.warn(
+        '[Auth] Force logout refused: target is not an active member',
+        {
+          targetUserId: userId,
+          adminId: req.user.id,
+        }
+      );
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    // The sessions about to be deleted are the account's EVERYWHERE, and the
+    // schema has no per-tenant session to offer instead. An active membership
+    // at another operator means somebody else has a colleague mid-shift whose
+    // working session this endpoint would destroy -- this operator's admin
+    // has no authority over that. The account shared with us but exclusive
+    // to nobody is refused outright; revoking the membership is the tool for
+    // taking someone off THIS operator, and it ends their access here without
+    // touching anyone else's sessions. (A merely REVOKED membership elsewhere
+    // does not block: that operator has nothing running on the person.)
+    if (await activeAtOtherTenants(userId)) {
+      logger.warn(
+        '[Auth] Force logout refused: account is active at another operator',
+        {
+          targetUserId: userId,
+          adminId: req.user.id,
+        }
+      );
+      return res.status(409).json({
+        error: 'Shared account',
+        message:
+          'This person is also an active member of another operator, and ' +
+          'force-logout ends their sessions everywhere. Revoke their ' +
+          'membership here instead -- that removes their access without ' +
+          'touching the other operator.',
+      });
     }
 
     // Deleting the rows rather than calling auth.api.revokeUserSessions,

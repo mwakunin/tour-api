@@ -251,6 +251,47 @@ describe('membership administration', () => {
     }
   });
 
+  it('does not turn two concurrent grants of the same role into a 500', async () => {
+    // grantMembership used to select for an existing row and insert in a
+    // separate transaction. Two grants of the same role at the same moment
+    // both observed "no row yet" and both inserted, and the unique constraint
+    // on (tenant, user, role) turned one perfectly valid grant into a 500.
+    // The upsert makes the constraint the serialisation point instead of a
+    // failure, so both requests succeed and exactly one row exists.
+    const [fresh] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `grant-race-${Date.now()}@example.com`,
+        name: 'Grant Race',
+        role: 'user',
+      })
+      .returning();
+
+    try {
+      const [respA, respB] = await Promise.all([
+        adminAgent
+          .post('/api/memberships')
+          .send({ user_id: fresh.id, role: 'staff' }),
+        adminAgent
+          .post('/api/memberships')
+          .send({ user_id: fresh.id, role: 'staff' }),
+      ]);
+
+      expect([respA.status, respB.status]).toEqual([201, 201]);
+
+      const rows = await db
+        .select()
+        .from(memberships)
+        .where(eq(memberships.user_id, fresh.id));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].is_active).toBe(true);
+      expect(rows[0].role).toBe('staff');
+    } finally {
+      await db.delete(user).where(eq(user.id, fresh.id));
+    }
+  });
+
   it('drops a revoked member from the list and the lookup, not from reach', async () => {
     // getAllUsers used to join every membership regardless of is_active, so
     // someone who left an operator was still a row in that operator's own

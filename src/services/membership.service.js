@@ -66,48 +66,40 @@ export const listMemberships = (filters = {}) => {
  * path that mints accounts -- with an email nobody has verified.
  */
 export const grantMembership = async ({ user_id, role }) => {
-  const [existing] = await withTenantDb((tx) =>
-    tx
-      .select({ id: memberships.id, is_active: memberships.is_active })
-      .from(memberships)
-      .where(and(eq(memberships.user_id, user_id), eq(memberships.role, role)))
-      .limit(1)
-  );
-
+  // ONE statement, not read-then-write. The old shape selected for an
+  // existing row and inserted in a separate transaction, so two concurrent
+  // grants of the same role could both observe "no row yet" and both insert;
+  // the unique constraint then turned one valid grant into a 500. The
+  // constraint is still there, but as the serialisation point rather than a
+  // failure: whoever loses the race takes the conflict arm instead of
+  // erroring.
+  //
   // Re-granting a revoked role reactivates the original row rather than
-  // inserting a second one -- the unique constraint on (tenant, user, role)
-  // would refuse the insert anyway, and reactivating keeps created_at as the
-  // date they first held it.
-  if (existing) {
-    const [reactivated] = await withTenantDb((tx) =>
-      tx
-        .update(memberships)
-        .set({ is_active: true, updated_at: new Date() })
-        .where(eq(memberships.id, existing.id))
-        .returning()
-    );
-
-    logger.info('[membership] reactivated', {
-      membershipId: reactivated.id,
-      role,
-      tenantId: currentTenantId(),
-    });
-    return reactivated;
-  }
-
-  const [created] = await withTenantDb((tx) =>
+  // inserting a second one -- reactivating keeps created_at as the date they
+  // first held it. A re-grant of an already-active row is idempotent: same
+  // is_active it already had, updated_at bumped, which is what the old
+  // update arm did too.
+  const [granted] = await withTenantDb((tx) =>
     tx
       .insert(memberships)
       .values({ tenant_id: currentTenantId(), user_id, role })
+      .onConflictDoUpdate({
+        target: [memberships.tenant_id, memberships.user_id, memberships.role],
+        set: { is_active: true, updated_at: new Date() },
+      })
       .returning()
   );
 
+  // No granted-vs-reactivated split in the log any more: one statement
+  // cannot report which arm fired, and an extra read just to label a log
+  // line would reintroduce the read-then-act window this replaced. A
+  // re-grant is a grant.
   logger.info('[membership] granted', {
-    membershipId: created.id,
+    membershipId: granted.id,
     role,
     tenantId: currentTenantId(),
   });
-  return created;
+  return granted;
 };
 
 /**
