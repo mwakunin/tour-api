@@ -15,6 +15,7 @@ import { db } from '#config/database.js';
 import { runWithTenant, withTenantDb } from '#config/tenantContext.js';
 import { tenants, memberships, user, session } from '#models/schema.js';
 import { loadMembership } from '#middleware/membership.middleware.js';
+import { grantSignupMembership } from '#services/membership.service.js';
 import { SEED_TENANT_ID } from '#middleware/tenant.middleware.js';
 import {
   createAuthenticatedAdminAgent,
@@ -397,6 +398,48 @@ describe('authorization comes from the membership, over HTTP', () => {
     expect(held.roles).toEqual(['customer']);
 
     await deleteTestUser(retry.body.user.id);
+  });
+
+  it('treats an already-granted membership as success, not a failure to undo', async () => {
+    // The retry loop's own hazard: the insert commits the instant the
+    // statement lands, so a connection lost AFTER that commit makes the
+    // caller see a failure for work that is already done. The retry then
+    // meets the row the earlier attempt created. Counting that unique
+    // violation as a failure used to burn every attempt and end in
+    // undoSignup -- deleting a user whose membership existed, i.e. destroying
+    // a finished sign-up over a blip that happened after the work. The
+    // conflict is the memory of a success, so the fix makes it resolve: the
+    // call below runs against a membership that is ALREADY in the table, and
+    // must come back clean with the account untouched.
+    const [pre] = await db
+      .insert(user)
+      .values({
+        id: crypto.randomUUID(),
+        email: `committed-${Date.now()}@example.com`,
+        name: 'Already Granted',
+        role: 'user',
+      })
+      .returning();
+
+    await db.insert(memberships).values({
+      tenant_id: SEED_TENANT_ID,
+      user_id: pre.id,
+      role: 'customer',
+    });
+
+    try {
+      await expect(
+        grantSignupMembership(pre.id, SEED_TENANT_ID)
+      ).resolves.toBeUndefined();
+
+      const [survivor] = await db
+        .select({ id: user.id })
+        .from(user)
+        .where(eq(user.id, pre.id));
+      expect(survivor).toBeDefined();
+    } finally {
+      await db.delete(user).where(eq(user.id, pre.id));
+    }
   });
 
   it('will not mutate a user who also works for another operator', async () => {

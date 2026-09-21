@@ -45,6 +45,21 @@ describe('membership administration', () => {
     expect(mine.email).toBe(testAdmin.email);
   });
 
+  it('lists users in a fixed order, so pages cannot shuffle', async () => {
+    // Pinning the contract rather than catching the old bug: without an
+    // ORDER BY, Postgres usually still hands back a stable order for
+    // identical small scans in one connection, so no single-process test
+    // could have failed the unordered query reliably -- the misordering bit
+    // when a plan changed under load and page 2 repeated or skipped rows
+    // page 1 had shown. The clause is the proof; this asserts the order the
+    // API now promises, so dropping it silently regresses the pagination
+    // contract.
+    const list = await adminAgent.get('/api/users?limit=200').expect(200);
+
+    const stamps = list.body.users.map((row) => row.createdAt);
+    expect([...stamps].sort()).toEqual(stamps);
+  });
+
   it('promotes a customer to staff, then revokes it', async () => {
     // Sign-up grants `customer` and nothing else -- there is no self-service
     // route to authority -- so becoming staff is an act by an administrator.

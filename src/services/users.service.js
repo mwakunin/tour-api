@@ -80,20 +80,30 @@ export const getAllUsers = async (filters = {}) => {
         );
       }
 
-      return tx
-        .selectDistinct({
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          createdAt: user.createdAt,
-          updatedAt: user.updatedAt,
-        })
-        .from(user)
-        .innerJoin(memberships, eq(memberships.user_id, user.id))
-        .where(and(...conditions))
-        .limit(limit)
-        .offset(offset);
+      return (
+        tx
+          .selectDistinct({
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: user.role,
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt,
+          })
+          .from(user)
+          .innerJoin(memberships, eq(memberships.user_id, user.id))
+          .where(and(...conditions))
+          // A page is only a page if the order behind it is fixed. DISTINCT
+          // plus limit/offset with no ORDER BY lets Postgres hand back rows in
+          // whatever order the chosen plan produces, so page 2 could repeat or
+          // skip somebody page 1 already showed as the plan shifted underneath
+          // it. Both keys are in the DISTINCT select list, as SELECT DISTINCT
+          // requires of an ORDER BY; the id breaks ties because created_at is
+          // only microsecond-precise and seed batches share one now().
+          .orderBy(user.createdAt, user.id)
+          .limit(limit)
+          .offset(offset)
+      );
     });
 
     // No `search` here: it is user-supplied and routinely an email address.

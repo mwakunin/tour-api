@@ -240,7 +240,24 @@ export const grantSignupMembership = async (userId, tenantId) => {
     try {
       await db
         .insert(memberships)
-        .values({ tenant_id: tenantId, user_id: userId, role: 'customer' });
+        .values({ tenant_id: tenantId, user_id: userId, role: 'customer' })
+        // Idempotent, because a retry here can meet the row its own earlier
+        // attempt created: the insert commits the instant the statement
+        // lands, and a connection lost AFTER that commit makes the caller
+        // see a failure for work that is already done. Without this, the
+        // unique violation counts as a failure, every retry burns, and
+        // undoSignup deletes a user whose membership exists -- destroying a
+        // finished sign-up over a blip that happened after the work. The
+        // conflict is the memory of a success; treat it as one. Targeted at
+        // the (tenant, user, role) key deliberately: any OTHER constraint
+        // violating here is unanticipated and must stay loud.
+        .onConflictDoNothing({
+          target: [
+            memberships.tenant_id,
+            memberships.user_id,
+            memberships.role,
+          ],
+        });
       return;
     } catch (error) {
       lastError = error;
